@@ -27,7 +27,7 @@ Aplikacija uporablja lastno uporabniško ime in geslo preko HTTPS. Podatki ostaj
 `npm ci`, `npm test`, `npm run build`. Za razvoj zaženi strežnik z nastavljenim `APP_PASSWORD` in `DATA_DIR`, nato `npm run dev`. Za razvoj na Vite nastavi `APP_ORIGIN=http://localhost:5173`.
 
 ## GitHub
-Ustvari zaseben repozitorij `projekti-tisk`. Ta paket vsebuje preverjanje ob pushu in pull requestu. Samodejno nameščanje na strežnik se uredi po potrditvi njegove poti, dostopa in domene; paket ga še ne sproži. Gesla, podatkov in PDF-jev ne dodajaj v Git.
+Repozitorij `damirjunuz/projekti-tisk` vsebuje preverjanje ob pushu in pull requestu. Samodejno nameščanje na strežnik se uredi po potrditvi njegove poti, dostopa in domene; paket ga še ne sproži. Gesla, podatkov in PDF-jev ne dodajaj v Git.
 
 ## Prenos obstoječih podatkov
 Ta različica uporablja lokalne datoteke namesto Sites/R2. Projekti, PDF-ji in oznake iz obstoječe aplikacije se ne prenesejo samodejno. Pred preklopom je treba narediti izvoz iz obstoječe aplikacije in uvoz v novo; stara aplikacija naj ostane dostopna do preverjenega prenosa.
