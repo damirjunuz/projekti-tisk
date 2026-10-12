@@ -2,16 +2,13 @@ import http from 'node:http';
 import {readFile,writeFile,mkdir,readdir,rename,unlink} from 'node:fs/promises';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {randomUUID,createHash,timingSafeEqual} from 'node:crypto';
+import {randomUUID} from 'node:crypto';
 import {PDFDocument} from 'pdf-lib';
 const root=path.resolve(process.env.DATA_DIR||'data'),dist=fileURLToPath(new URL('../dist/',import.meta.url));
-const username=process.env.APP_USER||'damir',password=process.env.APP_PASSWORD;
-if(!password||password.length<12)throw Error('APP_PASSWORD mora imeti najmanj 12 znakov.');
 const origin=process.env.APP_ORIGIN;
 await mkdir(path.join(root,'meta'),{recursive:true});await mkdir(path.join(root,'files'),{recursive:true});
 let queue=Promise.resolve();
 function locked(action){const result=queue.then(action);queue=result.catch(()=>{});return result;}
-const hash=s=>createHash('sha256').update(s).digest();
 const valid=s=>typeof s==='string'&&/^[a-zA-Z0-9-]{1,80}$/.test(s);
 const json=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
 async function readBody(req,limit){const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>limit){const e=Error('Datoteka je prevelika.');e.status=413;throw e;}chunks.push(chunk);}return Buffer.concat(chunks);}
@@ -21,9 +18,6 @@ async function put(id,value){const file=meta(id),temp=file+'.'+randomUUID()+'.tm
 async function handle(req,res){
  const url=new URL(req.url,'http://localhost');
  if(url.pathname==='/health'){return json(res,200,{status:'ok'});}
- const auth=req.headers.authorization||'';
- const supplied=auth.startsWith('Basic ')?Buffer.from(auth.slice(6),'base64').toString('utf8'):'';
- if(!timingSafeEqual(hash(supplied),hash(username+':'+password))){res.writeHead(401,{'WWW-Authenticate':'Basic realm="Projekti in tisk", charset="UTF-8"','Content-Type':'text/plain; charset=utf-8'});res.end('Za dostop se prijavi.');return;}
  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','SAMEORIGIN');
  if(url.pathname==='/api/data'){
   const id=url.searchParams.get('id'),kind=url.searchParams.get('kind');

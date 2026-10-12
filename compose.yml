@@ -3,9 +3,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      APP_USER: ${APP_USER:-damir}
-      APP_PASSWORD: ${APP_PASSWORD:?Nastavi APP_PASSWORD v .env}
-      APP_ORIGIN: ${APP_ORIGIN:?Nastavi APP_ORIGIN v .env}
+      APP_ORIGIN: ${APP_ORIGIN:-https://tisk.dservis.si}
     volumes:
       - projekti_tisk_data:/data
     ports:
