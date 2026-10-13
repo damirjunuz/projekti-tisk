@@ -19,7 +19,7 @@ test('Only the admin PIN exposes projects; a selected coworker receives only ass
   const maid=await (await request('POST','/api/data?kind=person',{name:'Maid'},admin)).json();const other=await (await request('POST','/api/data?kind=person',{name:'Drugi'},admin)).json();
   const p1=await (await request('POST','/api/data',{name:'Projekt za Maida'},admin)).json(),p2=await (await request('POST','/api/data',{name:'Skriti projekt'},admin)).json();
   const mine=await (await request('POST','/api/data?kind=task',{project:p1.id,title:'Pločevine',assigneeId:maid.id},admin)).json(),notMine=await (await request('POST','/api/data?kind=task',{project:p2.id,title:'Skrita naloga',assigneeId:other.id},admin)).json();
-  const pdf=await PDFDocument.create();pdf.addPage();const doc=await (await request('POST','/api/data?kind=upload&project='+p1.id,await pdf.save(),admin)).json();
+  const pdf=await PDFDocument.create();pdf.addPage();pdf.addPage();pdf.addPage();const doc=await (await request('POST','/api/data?kind=upload&project='+p1.id,await pdf.save(),admin)).json();
   const people=await (await request('GET','/api/auth/people')).json();assert.deepEqual(people.map(p=>p.name).sort(),['Drugi','Maid']);assert.deepEqual(Object.keys(people[0]).sort(),['id','name']);
   const staff=await login({role:'staff',personId:maid.id});const session=await (await request('GET','/api/auth',null,staff)).json();assert.equal(session.role,'staff');assert.equal(session.name,'Maid');
   const visible=await (await request('GET','/api/data',null,staff)).json();assert.deepEqual(visible.map(r=>r.id).sort(),[p1.id,mine.id].sort());assert.equal(visible.some(r=>r.type==='document'||r.type==='person'),false);
@@ -30,6 +30,12 @@ test('Only the admin PIN exposes projects; a selected coworker receives only ass
   const part2=await (await request('POST','/api/data?kind=upload&project='+p1.id+'&delivery=2&name=part2.pdf',await pdf.save(),admin)).json();
   const foreign=await (await request('POST','/api/data?kind=upload&project='+p2.id+'&name=other.pdf',await pdf.save(),admin)).json();
   await request('PATCH','/api/data?kind=document-owner',{ids:[part1.id,part2.id],assigneeId:maid.id},admin);
+  const single=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id],done:true,pages:[1]},staff)).json();
+  assert.equal(single[0].workDone,false);assert.deepEqual(single[0].workConfirmedPages,[1]);assert.equal(single[0].workConfirmedBy,null);assert.equal(single[0].workPageConfirmations[1].by,'Maid');assert.deepEqual(single[0].printed,[1]);
+  const adminPartial=await (await request('GET','/api/data',null,admin)).json();assert.deepEqual(adminPartial.find(d=>d.id===doc.id).workConfirmedPages,[1]);assert.equal(adminPartial.find(d=>d.id===mine.id).pdfProgress.confirmedPages,1);assert.equal(adminPartial.find(d=>d.id===mine.id).pdfProgress.totalPages,9);assert.equal(adminPartial.find(d=>d.id===mine.id).done,false);
+  assert.equal((await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id],done:true,pages:[4]},staff)).status,400);
+  const repeated=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id],done:true,pages:[1]},staff)).json();assert.equal(repeated[0].workHistory.length,single[0].workHistory.length);
+  await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id],done:false,pages:[1]},staff);const undone=await (await request('GET','/api/data',null,staff)).json();assert.deepEqual(undone.find(d=>d.id===doc.id).workConfirmedPages,[]);
   const partial=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id],done:true,actorId:other.id},staff)).json();assert.equal(partial[0].workDone,true);assert.equal(partial[0].workConfirmedBy,'Maid');assert.deepEqual(partial[0].printed,[1]);
   let progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===part1.id).workDone,false);assert.equal(progress.find(d=>d.id===part2.id).workDone,false);
   assert.equal((await request('PATCH','/api/data?kind=document-confirmation',{ids:[part1.id,foreign.id],done:true},staff)).status,403);
@@ -56,6 +62,8 @@ test('Only the admin PIN exposes projects; a selected coworker receives only ass
   assert.equal((await request('PATCH','/api/data?kind=project&id='+p1.id,{printStamp:'8'},staff)).status,403);
   assert.equal((await request('DELETE','/api/data?kind=task&id='+mine.id,null,staff)).status,403);
   assert.equal((await request('PATCH','/api/data?kind=task&id='+notMine.id,{done:true,actorId:other.id,role:'admin'},staff)).status,403);
+  assert.equal((await request('PATCH','/api/data?kind=task&id='+mine.id,{done:true},staff)).status,409);
+  await request('PATCH','/api/data?kind=document-confirmation',{ids:[part1.id,part2.id],done:true},staff);
   const confirmed=await (await request('PATCH','/api/data?kind=task&id='+mine.id,{done:true,actorId:other.id},staff)).json();assert.equal(confirmed.done,true);assert.equal(confirmed.confirmedBy,'Maid');
   assert.equal((await request('POST','/api/auth',{role:'admin',personId:maid.id})).status,401);
   await request('DELETE','/api/auth',null,staff);assert.equal((await request('GET','/api/data',null,staff)).status,401);

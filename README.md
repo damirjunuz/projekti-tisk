@@ -1,66 +1,47 @@
-import {test} from 'node:test';
-import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
-import {mkdtemp,rm} from 'node:fs/promises';
-import {tmpdir} from 'node:os';
-import path from 'node:path';
-import net from 'node:net';
-import {PDFDocument} from 'pdf-lib';
-test('Only the admin PIN exposes projects; a selected coworker receives only assigned tasks',async()=>{
- const dir=await mkdtemp(path.join(tmpdir(),'tisk-access-')),socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
- const base='http://127.0.0.1:'+port,adminPin='654321';
- const child=spawn(process.execPath,['server/index.mjs'],{env:{...process.env,PORT:String(port),HOST:'127.0.0.1',DATA_DIR:dir,APP_ORIGIN:base,ADMIN_PIN:adminPin},stdio:['ignore','pipe','pipe']});
- const request=(method,path='',body,cookie='')=>fetch(base+path,{method,headers:{...(cookie?{Cookie:cookie}:{}),...(body&&!(body instanceof Uint8Array)?{'Content-Type':'application/json'}:{})},body:body?(body instanceof Uint8Array?body:JSON.stringify(body)):undefined});
- const login=async body=>{const r=await request('POST','/api/auth',body);assert.equal(r.status,200);const setCookie=r.headers.get('set-cookie');assert.match(setCookie,/HttpOnly/);assert.match(setCookie,/SameSite=Strict/);return setCookie.split(';')[0];};
- try{
-  await new Promise((resolve,reject)=>{child.stdout.once('data',resolve);child.once('exit',()=>reject(Error('Server failed')));setTimeout(()=>reject(Error('Startup timeout')),10000).unref();});
-  assert.equal((await request('GET','/api/data')).status,401);assert.equal((await request('POST','/api/auth',{role:'admin',pin:'000000'})).status,401);
-  const admin=await login({role:'admin',pin:adminPin});
-  const maid=await (await request('POST','/api/data?kind=person',{name:'Maid'},admin)).json();const other=await (await request('POST','/api/data?kind=person',{name:'Drugi'},admin)).json();
-  const p1=await (await request('POST','/api/data',{name:'Projekt za Maida'},admin)).json(),p2=await (await request('POST','/api/data',{name:'Skriti projekt'},admin)).json();
-  const mine=await (await request('POST','/api/data?kind=task',{project:p1.id,title:'Pločevine',assigneeId:maid.id},admin)).json(),notMine=await (await request('POST','/api/data?kind=task',{project:p2.id,title:'Skrita naloga',assigneeId:other.id},admin)).json();
-  const pdf=await PDFDocument.create();pdf.addPage();const doc=await (await request('POST','/api/data?kind=upload&project='+p1.id,await pdf.save(),admin)).json();
-  const people=await (await request('GET','/api/auth/people')).json();assert.deepEqual(people.map(p=>p.name).sort(),['Drugi','Maid']);assert.deepEqual(Object.keys(people[0]).sort(),['id','name']);
-  const staff=await login({role:'staff',personId:maid.id});const session=await (await request('GET','/api/auth',null,staff)).json();assert.equal(session.role,'staff');assert.equal(session.name,'Maid');
-  const visible=await (await request('GET','/api/data',null,staff)).json();assert.deepEqual(visible.map(r=>r.id).sort(),[p1.id,mine.id].sort());assert.equal(visible.some(r=>r.type==='document'||r.type==='person'),false);
-  assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,staff)).status,403);
-  await request('PATCH','/api/data?id='+doc.id,{pages:[1],printed:true},admin);
-  const moved=await (await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:maid.id},admin)).json();assert.equal(moved[0].assigneeName,'Maid');assert.deepEqual(moved[0].printed,[1]);
-  const part1=await (await request('POST','/api/data?kind=upload&project='+p1.id+'&delivery=1&name=part1.pdf',await pdf.save(),admin)).json();
-  const part2=await (await request('POST','/api/data?kind=upload&project='+p1.id+'&delivery=2&name=part2.pdf',await pdf.save(),admin)).json();
-  const foreign=await (await request('POST','/api/data?kind=upload&project='+p2.id+'&name=other.pdf',await pdf.save(),admin)).json();
-  await request('PATCH','/api/data?kind=document-owner',{ids:[part1.id,part2.id],assigneeId:maid.id},admin);
-  const partial=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id],done:true,actorId:other.id},staff)).json();assert.equal(partial[0].workDone,true);assert.equal(partial[0].workConfirmedBy,'Maid');assert.deepEqual(partial[0].printed,[1]);
-  let progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===part1.id).workDone,false);assert.equal(progress.find(d=>d.id===part2.id).workDone,false);
-  assert.equal((await request('PATCH','/api/data?kind=document-confirmation',{ids:[part1.id,foreign.id],done:true},staff)).status,403);
-  progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===part1.id).workDone,false);
-  const finished=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id,part1.id],done:true},staff)).json();assert.equal(finished.every(d=>d.workDone),true);
-  const again=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id,part1.id],done:true},staff)).json();assert.equal(again[0].workHistory.length,finished[0].workHistory.length);assert.equal(again[1].workConfirmedAt,finished[1].workConfirmedAt);
-  progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===part2.id).workDone,false);
-  await request('PATCH','/api/data?kind=document-confirmation',{ids:[part1.id],done:false},staff);progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===doc.id).workDone,true);assert.equal(progress.find(d=>d.id===part1.id).workDone,false);
-  const sameFolder=await (await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:maid.id},admin)).json();assert.equal(sameFolder[0].workDone,true);
+# Projekti in tisk
 
-  let folder=await (await request('GET','/api/data',null,staff)).json();assert.equal(folder.some(r=>r.id===doc.id),true);assert.equal(folder.some(r=>r.id===notMine.id),false);
-  const pdfResponse=await request('GET','/api/data?kind=file&id='+doc.id,null,staff);assert.equal(pdfResponse.status,200);assert.equal(pdfResponse.headers.get('content-type'),'application/pdf');
-  assert.equal((await request('HEAD','/api/data?kind=file&id='+doc.id,null,staff)).status,200);
-  assert.equal((await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:other.id},staff)).status,403);
-  await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:other.id},admin);assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,staff)).status,403);
-  folder=await (await request('GET','/api/data',null,staff)).json();assert.equal(folder.some(r=>r.id===doc.id),false);
-  const otherSession=await login({role:'staff',personId:other.id});assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,otherSession)).status,200);
-  await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:null},admin);assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,otherSession)).status,403);
-  const adminRows=await (await request('GET','/api/data',null,admin)).json();assert.equal(adminRows.filter(r=>r.id===doc.id).length,1);assert.deepEqual(adminRows.find(r=>r.id===doc.id).printed,[1]);assert.equal(adminRows.find(r=>r.id===doc.id).assigneeId,null);assert.equal(adminRows.find(r=>r.id===doc.id).workDone,false);
-  assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,admin)).status,200);
+Samostojna aplikacija za PDF projekte, pošiljke, evidenco tiskanja in potrjevanje dela sodelavcev.
 
-  assert.equal((await request('DELETE','/api/data?kind=project&id='+p1.id,null,staff)).status,403);
-  assert.equal((await request('POST','/api/data?kind=person',{name:'Bypass'},staff)).status,403);
-  assert.equal((await request('PATCH','/api/data?kind=project&id='+p1.id,{printStamp:'8'},staff)).status,403);
-  assert.equal((await request('DELETE','/api/data?kind=task&id='+mine.id,null,staff)).status,403);
-  assert.equal((await request('PATCH','/api/data?kind=task&id='+notMine.id,{done:true,actorId:other.id,role:'admin'},staff)).status,403);
-  const confirmed=await (await request('PATCH','/api/data?kind=task&id='+mine.id,{done:true,actorId:other.id},staff)).json();assert.equal(confirmed.done,true);assert.equal(confirmed.confirmedBy,'Maid');
-  assert.equal((await request('POST','/api/auth',{role:'admin',personId:maid.id})).status,401);
-  await request('DELETE','/api/auth',null,staff);assert.equal((await request('GET','/api/data',null,staff)).status,401);
-  await request('DELETE','/api/auth',null,admin);assert.equal((await request('GET','/api/data',null,admin)).status,401);
-  for(let i=0;i<8;i++)await request('POST','/api/auth',{role:'admin',pin:'000000'});
-  assert.equal((await request('POST','/api/auth',{role:'admin',pin:adminPin})).status,429);
- }finally{if(child.exitCode===null)await new Promise(r=>{child.once('exit',r);child.kill('SIGTERM');});await rm(dir,{recursive:true,force:true});}
-});
+## Projekti in tisk
+
+PDF-je lahko ročno naložiš in razvrstiš po skupinah ter oštevilčenih pošiljkah. Zaključek pošiljke pripravi naslednjo pošiljko. Dokumente lahko izbrišeš ali dodeliš sodelavcu z izbiro PDF-jev. Dodelitev ohrani dokument v upraviteljskem pogledu; ne ustvarja kopije.
+
+Privzeta oznaka za tisk je **5**, nastavljiva za vsak projekt. Pripravljeni PDF vsebuje oznako, skupino oziroma pošiljko, zaporedno številko in izvorno številko strani. Risba se prenese na novo stran z dodatnim prostorom za oznake. Za izpis na A4/A3 uporabi prilagoditev papirju; za natančno merilo uporabi izvirnik. Prenos PDF-ja ne označi strani kot natisnjene. Evidenco tiskanja potrdi upravitelj po tiskanju.
+
+## Sodelavci in potrditev dela
+
+Upravitelj doda ime sodelavca in njegove naloge. Sodelavec izbere ime brez PIN-a ter vidi PDF-je in naloge dodeljene temu imenu. Izbira imena ni preverjanje identitete. Upraviteljski pogled in spremembe projektov zahtevajo skrbniški PIN, preverjen na strežniku.
+
+Mape sodelavca so razdeljene po projektu, skupini in pošiljki. Potrditi je mogoče posamezno stran, celoten PDF ali celotno mapo. Upraviteljski pregled »Kaj je potrjeno pri sodelavcih« prikazuje ime dokumenta, potrjene in nepotrjene strani ter napredek mape. Ena potrjena stran od šestih pomeni **1/6 – delno potrjeno**. PDF in mapa sta v celoti potrjena šele po potrditvi vseh strani. Strani niso samodejno število fizičnih pločevin.
+
+Potrditve strani hranijo ime izbrane seje in čas. Potrditev naloge je dovoljena šele, ko so v celoti potrjeni vsi PDF-ji tega projekta, dodeljeni istemu sodelavcu. Naloge brez dodeljenih PDF-jev se lahko potrdijo samostojno. Potrditev dela je ločena od evidence tiskanja. Dodelitev drugemu sodelavcu ponastavi potrditev dela; ponovna dodelitev istemu sodelavcu jo ohrani. Stare potrditve celotnih PDF-jev se ob branju prenesejo na vse njihove strani.
+
+## Namestitev
+
+Potrebna sta Docker Compose in Caddy. Kopiraj `.env.example` v `.env`, nastavi `ADMIN_PIN` (6–12 številk), `APP_ORIGIN` in `CADDY_NETWORK`, nato zaženi:
+
+```sh
+docker compose up -d --build
+```
+
+Privzeti lokalni naslov je `127.0.0.1:3105`, vrata aplikacije v vsebniku pa `3100`. Caddy mora biti v istem omrežju:
+
+```caddy
+tisk.dservis.si {
+    reverse_proxy projekti-tisk:3100
+}
+```
+
+Zdravje aplikacije preveri z `curl http://127.0.0.1:3105/health`. Po spremembi Caddyfile preveri konfiguracijo in jo ponovno naloži.
+
+Za posodobitev v `/opt/projekti-tisk` izvedi `git pull --ff-only` in `docker compose up -d --build`. Podatki ostanejo v volume `projekti_tisk_data`; ne uporabljaj `docker compose down -v`, če želiš podatke ohraniti. Za varnostno kopijo ustavi aplikacijo in arhiviraj celoten volume.
+
+## Razvoj in preverjanje
+
+```sh
+npm ci
+npm test
+npm run build
+```
+
+Preverjanja pokrivajo dostop upravitelja in sodelavcev, delne potrditve strani, preprečevanje prezgodnje potrditve nalog, ločeno evidenco tiskanja, pošiljke, trajnost podatkov in pripravo oznak na PDF-jih.
