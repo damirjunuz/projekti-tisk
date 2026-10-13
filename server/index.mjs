@@ -27,6 +27,21 @@ async function handle(req,res){
    const rows=await Promise.all(names.map(n=>get(n.slice(0,-5))));return json(res,200,rows.filter(Boolean));
   }
   const reqOrigin=req.headers.origin;if(reqOrigin&&(origin?reqOrigin!==origin:new URL(reqOrigin).host!==req.headers.host))return json(res,403,{error:'Nedovoljen izvor.'});
+  if(req.method==='POST'&&kind==='person'){
+   const body=JSON.parse((await readBody(req,16384)).toString());if(typeof body.name!=='string'||!body.name.trim()||body.name.trim().length>80)return json(res,400,{error:'Vpiši ime sodelavca (največ 80 znakov).'});
+   return locked(async()=>{const name=body.name.trim();const names=(await readdir(path.join(root,'meta'))).filter(n=>n.startsWith('u-')&&n.endsWith('.json'));const people=await Promise.all(names.map(n=>get(n.slice(0,-5))));const existing=people.find(p=>p&&p.name.toLocaleLowerCase()===name.toLocaleLowerCase());if(existing)return json(res,200,existing);const person={type:'person',id:randomUUID(),name,created:new Date().toISOString()};await put('u-'+person.id,person);json(res,200,person);});
+  }
+  if(req.method==='POST'&&kind==='task'){
+   const body=JSON.parse((await readBody(req,16384)).toString());if(!valid(body.project)||!valid(body.assigneeId)||typeof body.title!=='string'||!body.title.trim()||body.title.trim().length>160)return json(res,400,{error:'Vpiši nalogo in izberi zadolženega sodelavca.'});
+   return locked(async()=>{const p=await get('p-'+body.project),person=await get('u-'+body.assigneeId);if(!p||!person)return json(res,404,{error:'Projekt ali sodelavec ni najden.'});const task={type:'task',id:randomUUID(),project:body.project,title:body.title.trim(),assigneeId:person.id,assigneeName:person.name,done:false,confirmedBy:null,confirmedAt:null,history:[],created:new Date().toISOString()};await put('t-'+task.id,task);json(res,200,task);});
+  }
+  if(req.method==='PATCH'&&kind==='task'){
+   if(!valid(id))return json(res,400,{error:'Napačna naloga.'});const body=JSON.parse((await readBody(req,16384)).toString());if(typeof body.done!=='boolean'||!valid(body.actorId))return json(res,400,{error:'Izberi svoje ime.'});
+   return locked(async()=>{const task=await get('t-'+id),actor=await get('u-'+body.actorId);if(!task||!actor)return json(res,404,{error:'Naloga ali sodelavec ni najden.'});if(task.assigneeId!==actor.id)return json(res,403,{error:'Nalogo potrdi zadolženi sodelavec. Izberi njegovo ime.'});if(task.done===body.done)return json(res,200,task);const at=new Date().toISOString();task.done=body.done;task.confirmedBy=body.done?actor.name:null;task.confirmedAt=body.done?at:null;task.history=[...(task.history||[]),{done:body.done,by:actor.name,at}];await put('t-'+id,task);json(res,200,task);});
+  }
+  if(req.method==='DELETE'&&kind==='task'){
+   if(!valid(id))return json(res,400,{error:'Napačna naloga.'});return locked(async()=>{if(!await get('t-'+id))return json(res,404,{error:'Naloga ni najdena.'});await unlink(meta('t-'+id));json(res,200,{deleted:[id]});});
+  }
   if(req.method==='POST'&&kind==='upload'){
    const project=url.searchParams.get('project');if(!valid(project)||!await get('p-'+project))return json(res,400,{error:'Projekt ne obstaja.'});
    const delivery=Number(url.searchParams.get('delivery')||1);if(!Number.isInteger(delivery)||delivery<1||delivery>99)return json(res,400,{error:'Napačna številka pošiljke.'});
@@ -63,8 +78,8 @@ async function handle(req,res){
      documents=await Promise.all([...new Set(body.ids)].map(id=>get('d-'+id)));if(documents.some(d=>!d))return json(res,404,{error:'Dokument ni najden.'});
     }
     for(const d of documents){try{await unlink(path.join(root,'files',d.id+'.pdf'));}catch(e){if(e.code!=='ENOENT')throw e;}await unlink(meta('d-'+d.id));}
-    if(kind==='project')await unlink(meta('p-'+id));
-    json(res,200,{deleted:documents.map(d=>d.id),project:kind==='project'?id:null});
+    let tasks=[];if(kind==='project'){const names=(await readdir(path.join(root,'meta'))).filter(n=>n.startsWith('t-')&&n.endsWith('.json'));tasks=(await Promise.all(names.map(n=>get(n.slice(0,-5))))).filter(t=>t&&t.project===id);for(const t of tasks)await unlink(meta('t-'+t.id));await unlink(meta('p-'+id));}
+    json(res,200,{deleted:[...documents.map(d=>d.id),...tasks.map(t=>t.id)],project:kind==='project'?id:null});
    });
   }
   if(req.method==='PATCH'&&kind==='project'){
