@@ -38,3 +38,6 @@ Samodejni prevzem posredovanih PDF-jev še ni povezan. API je pripravljen za n8n
 
 ## Skupine znotraj projekta
 Za načrte, prejete v več pošiljkah, izberi obstoječi projekt in v polje »Skupina novih PDF-jev« vpiši del projekta, npr. »SDe08 – I. del« ali »SDe08 – II. del«, nato klikni »Dodaj PDF«. Vsi izbrani PDF-ji dobijo to skupino. Po skupinah lahko filtriraš dokumente. Že naloženemu PDF-ju nastavi skupino v polju »Skupina / del projekta« in shrani. Sprememba skupine ohrani natisnjene strani. Skupina in številka naloga se izpišeta v zgornjem robu pripravljenega PDF-ja; dolga oznaka se skrajša na širino roba, šumniki v tej oznaki pa se pretvorijo v osnovne črke.
+
+## Izbor, pošiljke in brisanje
+Kljukice ob PDF-jih izberejo dokumente. V polju »Številka pošiljke« določi 1., 2. itd., nato uporabi »Označi N. pošiljko«. Ta oznaka velja tudi za nove PDF-je in se izpiše v zgornjem robu PDF-ja za tisk. Filter »Prikaži pošiljko« loči načrte, prejete v več delih. Skupine ostanejo ločene oznake za fasado ali vrsto načrtov. Gumb »Izbriši izbrane« odstrani izbrane PDF-je in njihovo evidenco, ko brisanje potrdiš. Pri odprtem dokumentu je na voljo tudi koš za posamično brisanje. »Izbriši projekt« po potrditvi odstrani celoten projekt in njegove PDF-je.

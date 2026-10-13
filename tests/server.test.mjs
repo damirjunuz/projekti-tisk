@@ -30,6 +30,16 @@ const anonymous=await fetch(base+'/api/data');assert.equal(anonymous.status,200)
  const moved=await (await request('PATCH','?kind=group&id='+d.id,{group:'SDe08 - II. del'})).json();assert.equal(moved.group,'SDe08 - II. del');assert.deepEqual(moved.printed,[1,2]);
  await request('PATCH','?id='+d.id,{pages:[1],printed:false});await stop();await launch();rows=await (await request('GET')).json();assert.deepEqual(rows.find(x=>x.id===d.id).printed,[2]);assert.equal(rows.find(x=>x.id===d.id).group,'SDe08 - II. del');assert.equal(rows.find(x=>x.id===p.id).printStamp,'7');
  assert.equal((await request('GET','?kind=file&id='+d.id)).headers.get('content-type'),'application/pdf');
+ const d2=await (await request('POST','?kind=upload&project='+p.id+'&name=second.pdf',await pdf.save())).json();assert.equal(d2.delivery,1);
+ const p2=await (await request('POST','',{name:'Keep this project'})).json();const d3=await (await request('POST','?kind=upload&project='+p2.id+'&name=keep.pdf',await pdf.save())).json();
+ const assigned=await (await request('PATCH','?kind=delivery',{ids:[d.id,d2.id],delivery:2})).json();assert.equal(assigned.length,2);assert.equal(assigned[0].delivery,2);assert.deepEqual(assigned[0].printed,[2]);
+ assert.equal((await request('PATCH','?kind=delivery',{ids:[d.id],delivery:100})).status,400);
+ assert.equal((await request('DELETE','',{ids:['missing-document']})).status,404);
+ const deleted=await (await request('DELETE','',{ids:[d.id]})).json();assert.deepEqual(deleted.deleted,[d.id]);assert.equal((await request('GET','?kind=file&id='+d.id)).status,404);
+ rows=await (await request('GET')).json();assert.equal(rows.some(x=>x.id===d.id),false);assert.equal(rows.some(x=>x.id===d2.id),true);
+ const removed=await (await request('DELETE','?kind=project&id='+p.id)).json();assert.deepEqual(removed.deleted,[d2.id]);assert.equal(removed.project,p.id);
+ assert.equal((await request('GET','?kind=file&id='+d2.id)).status,404);rows=await (await request('GET')).json();assert.equal(rows.some(x=>x.id===p.id),false);assert.equal(rows.some(x=>x.id===p2.id),true);assert.equal(rows.some(x=>x.id===d3.id),true);
+
  }finally{if(processHandle&&processHandle.exitCode===null)await stop();await rm(dir,{recursive:true,force:true});}
 });
 

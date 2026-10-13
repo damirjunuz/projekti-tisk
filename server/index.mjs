@@ -29,13 +29,35 @@ async function handle(req,res){
   const reqOrigin=req.headers.origin;if(reqOrigin&&(origin?reqOrigin!==origin:new URL(reqOrigin).host!==req.headers.host))return json(res,403,{error:'Nedovoljen izvor.'});
   if(req.method==='POST'&&kind==='upload'){
    const project=url.searchParams.get('project');if(!valid(project)||!await get('p-'+project))return json(res,400,{error:'Projekt ne obstaja.'});
+   const delivery=Number(url.searchParams.get('delivery')||1);if(!Number.isInteger(delivery)||delivery<1||delivery>99)return json(res,400,{error:'Napačna številka pošiljke.'});
    const bytes=await readBody(req,40*1024*1024);let pdf;try{pdf=await PDFDocument.load(bytes);}catch{return json(res,400,{error:'PDF je poškodovan ali zaklenjen z geslom.'});}
-   const doc={type:'document',id:randomUUID(),project,group:(url.searchParams.get('group')||'').trim().slice(0,160),name:(url.searchParams.get('name')||'Dokument.pdf').slice(0,240),pages:pdf.getPageCount(),printed:[],created:new Date().toISOString(),updated:new Date().toISOString()};
+   const doc={type:'document',id:randomUUID(),project,delivery,group:(url.searchParams.get('group')||'').trim().slice(0,160),name:(url.searchParams.get('name')||'Dokument.pdf').slice(0,240),pages:pdf.getPageCount(),printed:[],created:new Date().toISOString(),updated:new Date().toISOString()};
    const file=path.join(root,'files',doc.id+'.pdf');await writeFile(file,bytes,{mode:0o600});try{await put('d-'+doc.id,doc);}catch(e){await unlink(file);throw e;}return json(res,200,doc);
   }
   if(req.method==='POST'){
    const body=JSON.parse((await readBody(req,16384)).toString());if(typeof body.name!=='string'||!body.name.trim())return json(res,400,{error:'Vpiši ime projekta.'});
    const p={type:'project',id:randomUUID(),name:body.name.trim().slice(0,160),number:typeof body.number==='string'?body.number.slice(0,80):'',printStamp:'5',created:new Date().toISOString()};await put('p-'+p.id,p);return json(res,200,p);
+  }
+  if(req.method==='PATCH'&&kind==='delivery'){
+   const body=JSON.parse((await readBody(req,16384)).toString());
+   if(!Array.isArray(body.ids)||!body.ids.length||body.ids.length>500||body.ids.some(x=>!valid(x))||!Number.isInteger(body.delivery)||body.delivery<1||body.delivery>99)return json(res,400,{error:'Napačen izbor dokumentov ali pošiljke.'});
+   return locked(async()=>{const documents=await Promise.all([...new Set(body.ids)].map(id=>get('d-'+id)));if(documents.some(d=>!d))return json(res,404,{error:'Dokument ni najden.'});for(const d of documents){d.delivery=body.delivery;d.updated=new Date().toISOString();await put('d-'+d.id,d);}json(res,200,documents);});
+  }
+  if(req.method==='DELETE'){
+   return locked(async()=>{
+    let documents;
+    if(kind==='project'){
+     if(!valid(id)||!await get('p-'+id))return json(res,404,{error:'Projekt ni najden.'});
+     const names=(await readdir(path.join(root,'meta'))).filter(n=>n.startsWith('d-')&&n.endsWith('.json'));
+     documents=(await Promise.all(names.map(n=>get(n.slice(0,-5))))).filter(d=>d&&d.project===id);
+    }else{
+     const body=JSON.parse((await readBody(req,16384)).toString());if(!Array.isArray(body.ids)||!body.ids.length||body.ids.length>500||body.ids.some(x=>!valid(x)))return json(res,400,{error:'Izberi dokumente za brisanje.'});
+     documents=await Promise.all([...new Set(body.ids)].map(id=>get('d-'+id)));if(documents.some(d=>!d))return json(res,404,{error:'Dokument ni najden.'});
+    }
+    for(const d of documents){try{await unlink(path.join(root,'files',d.id+'.pdf'));}catch(e){if(e.code!=='ENOENT')throw e;}await unlink(meta('d-'+d.id));}
+    if(kind==='project')await unlink(meta('p-'+id));
+    json(res,200,{deleted:documents.map(d=>d.id),project:kind==='project'?id:null});
+   });
   }
   if(req.method==='PATCH'&&kind==='project'){
    if(!valid(id))return json(res,400,{error:'Napačen projekt.'});const body=JSON.parse((await readBody(req,16384)).toString());
