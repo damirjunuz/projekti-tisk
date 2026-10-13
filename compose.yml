@@ -3,6 +3,7 @@ services:
     build: .
     restart: unless-stopped
     environment:
+      ADMIN_PIN: ${ADMIN_PIN:?Nastavi skrbniški PIN v .env}
       APP_ORIGIN: ${APP_ORIGIN:-https://tisk.dservis.si}
     volumes:
       - projekti_tisk_data:/data
@@ -15,3 +16,4 @@ networks:
   caddy:
     external: true
     name: ${CADDY_NETWORK:-n8n_n8n-network}
+

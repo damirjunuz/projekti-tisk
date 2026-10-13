@@ -1,0 +1,39 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import {PDFDocument} from 'pdf-lib';
+test('Only the admin PIN exposes projects; a selected coworker receives only assigned tasks',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'tisk-access-')),socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
+ const base='http://127.0.0.1:'+port,adminPin='654321';
+ const child=spawn(process.execPath,['server/index.mjs'],{env:{...process.env,PORT:String(port),HOST:'127.0.0.1',DATA_DIR:dir,APP_ORIGIN:base,ADMIN_PIN:adminPin},stdio:['ignore','pipe','pipe']});
+ const request=(method,path='',body,cookie='')=>fetch(base+path,{method,headers:{...(cookie?{Cookie:cookie}:{}),...(body&&!(body instanceof Uint8Array)?{'Content-Type':'application/json'}:{})},body:body?(body instanceof Uint8Array?body:JSON.stringify(body)):undefined});
+ const login=async body=>{const r=await request('POST','/api/auth',body);assert.equal(r.status,200);const setCookie=r.headers.get('set-cookie');assert.match(setCookie,/HttpOnly/);assert.match(setCookie,/SameSite=Strict/);return setCookie.split(';')[0];};
+ try{
+  await new Promise((resolve,reject)=>{child.stdout.once('data',resolve);child.once('exit',()=>reject(Error('Server failed')));setTimeout(()=>reject(Error('Startup timeout')),10000).unref();});
+  assert.equal((await request('GET','/api/data')).status,401);assert.equal((await request('POST','/api/auth',{role:'admin',pin:'000000'})).status,401);
+  const admin=await login({role:'admin',pin:adminPin});
+  const maid=await (await request('POST','/api/data?kind=person',{name:'Maid'},admin)).json();const other=await (await request('POST','/api/data?kind=person',{name:'Drugi'},admin)).json();
+  const p1=await (await request('POST','/api/data',{name:'Projekt za Maida'},admin)).json(),p2=await (await request('POST','/api/data',{name:'Skriti projekt'},admin)).json();
+  const mine=await (await request('POST','/api/data?kind=task',{project:p1.id,title:'Pločevine',assigneeId:maid.id},admin)).json(),notMine=await (await request('POST','/api/data?kind=task',{project:p2.id,title:'Skrita naloga',assigneeId:other.id},admin)).json();
+  const pdf=await PDFDocument.create();pdf.addPage();const doc=await (await request('POST','/api/data?kind=upload&project='+p1.id,await pdf.save(),admin)).json();
+  const people=await (await request('GET','/api/auth/people')).json();assert.deepEqual(people.map(p=>p.name).sort(),['Drugi','Maid']);assert.deepEqual(Object.keys(people[0]).sort(),['id','name']);
+  const staff=await login({role:'staff',personId:maid.id});const session=await (await request('GET','/api/auth',null,staff)).json();assert.equal(session.role,'staff');assert.equal(session.name,'Maid');
+  const visible=await (await request('GET','/api/data',null,staff)).json();assert.deepEqual(visible.map(r=>r.id).sort(),[p1.id,mine.id].sort());assert.equal(visible.some(r=>r.type==='document'||r.type==='person'),false);
+  assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,staff)).status,403);
+  assert.equal((await request('DELETE','/api/data?kind=project&id='+p1.id,null,staff)).status,403);
+  assert.equal((await request('POST','/api/data?kind=person',{name:'Bypass'},staff)).status,403);
+  assert.equal((await request('PATCH','/api/data?kind=project&id='+p1.id,{printStamp:'8'},staff)).status,403);
+  assert.equal((await request('DELETE','/api/data?kind=task&id='+mine.id,null,staff)).status,403);
+  assert.equal((await request('PATCH','/api/data?kind=task&id='+notMine.id,{done:true,actorId:other.id,role:'admin'},staff)).status,403);
+  const confirmed=await (await request('PATCH','/api/data?kind=task&id='+mine.id,{done:true,actorId:other.id},staff)).json();assert.equal(confirmed.done,true);assert.equal(confirmed.confirmedBy,'Maid');
+  assert.equal((await request('POST','/api/auth',{role:'admin',personId:maid.id})).status,401);
+  await request('DELETE','/api/auth',null,staff);assert.equal((await request('GET','/api/data',null,staff)).status,401);
+  await request('DELETE','/api/auth',null,admin);assert.equal((await request('GET','/api/data',null,admin)).status,401);
+  for(let i=0;i<8;i++)await request('POST','/api/auth',{role:'admin',pin:'000000'});
+  assert.equal((await request('POST','/api/auth',{role:'admin',pin:adminPin})).status,429);
+ }finally{if(child.exitCode===null)await new Promise(r=>{child.once('exit',r);child.kill('SIGTERM');});await rm(dir,{recursive:true,force:true});}
+});

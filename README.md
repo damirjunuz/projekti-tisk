@@ -9,7 +9,7 @@ Načrt se v celoti prenese na novo stran z dodatnim prostorom za oznake. Razmerj
 ## Namestitev na strežnik
 Potrebna sta Docker Compose in obstoječe Caddy omrežje. Pred spremembami preveri prost port 3105, pravilno omrežje in DNS za izbrano domeno. Privzeti primer je `tisk.dservis.si`; domena ni samodejno nastavljena.
 
-1. Kopiraj `.env.example` v `.env` in nastavi pravilni `APP_ORIGIN` in `CADDY_NETWORK`.
+1. Kopiraj `.env.example` v `.env` in nastavi `ADMIN_PIN` (6–12 številk), pravilni `APP_ORIGIN` in `CADDY_NETWORK`.
 2. Zaženi `docker compose up -d --build`.
 3. Dodaj v obstoječi Caddyfile blok (drugo vsebino ohrani):
 
@@ -21,10 +21,10 @@ Potrebna sta Docker Compose in obstoječe Caddy omrežje. Pred spremembami preve
 
 4. Preveri Caddy konfiguracijo in jo ponovno naloži. Lokalno zdravje preveri z `curl http://127.0.0.1:3105/health`; nato preveri zunanji HTTPS naslov.
 
-Aplikacija se odpira brez uporabniškega imena in gesla; dokumenti in urejanje so dostopni obiskovalcem. Podatki ostajajo v Docker volume `projekti_tisk_data`. Za varnostno kopijo ustavi aplikacijo in arhiviraj celoten volume; nato jo znova zaženi. Posodobitve ne smejo brisati volume-a (`docker compose down -v` izbriše podatke).
+Upraviteljski pogled in PDF-ji so zaščiteni s skrbniškim PIN-om. Sodelavec izbere svoje ime brez PIN-a in vidi samo njemu dodeljene naloge ter njihove projekte. Podatki ostajajo v Docker volume `projekti_tisk_data`. Za varnostno kopijo ustavi aplikacijo in arhiviraj celoten volume; nato jo znova zaženi. Posodobitve ne smejo brisati volume-a (`docker compose down -v` izbriše podatke).
 
 ## Razvoj in preverjanje
-`npm ci`, `npm test`, `npm run build`. Za razvoj zaženi strežnik z nastavljenim `DATA_DIR`, nato `npm run dev`. Za razvoj na Vite nastavi `APP_ORIGIN=http://localhost:5173`.
+`npm ci`, `npm test`, `npm run build`. Za razvoj zaženi strežnik z nastavljenim `ADMIN_PIN` in `DATA_DIR`, nato `npm run dev`. Za razvoj na Vite nastavi `APP_ORIGIN=http://localhost:5173`.
 
 ## GitHub
 Repozitorij `damirjunuz/projekti-tisk` vsebuje preverjanje ob pushu in pull requestu. Samodejno nameščanje na strežnik se uredi po potrditvi njegove poti, dostopa in domene; paket ga še ne sproži. Gesla, podatkov in PDF-jev ne dodajaj v Git.
@@ -33,7 +33,7 @@ Repozitorij `damirjunuz/projekti-tisk` vsebuje preverjanje ob pushu in pull requ
 Ta različica uporablja lokalne datoteke namesto Sites/R2. Projekti, PDF-ji in oznake iz obstoječe aplikacije se ne prenesejo samodejno. Pred preklopom je treba narediti izvoz iz obstoječe aplikacije in uvoz v novo; stara aplikacija naj ostane dostopna do preverjenega prenosa.
 
 ## E-pošta
-Samodejni prevzem posredovanih PDF-jev še ni povezan. API je pripravljen za n8n: POST `/api/data` ustvari projekt, POST `/api/data?kind=upload&project=ID&name=IME.pdf` sprejme PDF. Za dostop uporabi HTTPS; prijava ni potrebna. Pred uvozom poišči projekt preko GET `/api/data`, da ne ustvarjaš podvojenih projektov. Dokončna pravila za predmet sporočila in deduplikacijo se dogovorijo ob povezavi maila.
+Samodejni prevzem posredovanih PDF-jev še ni povezan. API je pripravljen za n8n: POST `/api/data` ustvari projekt, POST `/api/data?kind=upload&project=ID&name=IME.pdf` sprejme PDF. Administrativni API zdaj zahteva skrbniško sejo. Za bodočo povezavo z n8n bo treba posebej urediti servisni dostop. Pred uvozom poišči projekt preko GET `/api/data`, da ne ustvarjaš podvojenih projektov. Dokončna pravila za predmet sporočila in deduplikacijo se dogovorijo ob povezavi maila.
 
 
 ## Skupine znotraj projekta
@@ -47,4 +47,7 @@ Po uvozu vseh PDF-jev v trenutno pošiljko klikni »Vsi PDF-ji v tej pošiljki s
 Stari PDF-ji brez številke pošiljke se obravnavajo kot 1. pošiljka; z izborom dokumentov jih lahko preoznačiš.
 
 ## Sodelavci in naloge
-V razdelku »Sodelavci in naloge« vpiši ime sodelavca, nato dodaj nalogo (npr. »Pločevine«) in izberi zadolženega. Imena so skupna vsem projektom, naloge pa pripadajo posameznemu projektu. Sodelavec odpre isti naslov, v polju »Trenutno delam kot« izbere svoje ime in obkljuka zadolženo nalogo. Zapišeta se izbrano ime in datum potrditve. S ponovno odstranitvijo kljukice se naloga odpre, zgodovina potrditev pa ostane shranjena. Ker je aplikacija brez prijave, je izbrano ime samodeklaracija in ne preverjena identiteta. Odprta aplikacija osveži podatke vsakih 30 sekund in ob vrnitvi v okno; na voljo je tudi »Osveži«. Nalogo lahko izbrišeš s košem. Brisanje projekta odstrani tudi njegove naloge, seznam sodelavcev pa ohrani.
+V razdelku »Sodelavci in naloge« vpiši ime sodelavca, nato dodaj nalogo (npr. »Pločevine«) in izberi zadolženega. Imena so skupna vsem projektom, naloge pa pripadajo posameznemu projektu. Sodelavec odpre isti naslov, na začetni strani izbere »Sodelavec« in svoje ime; nato vidi samo dodeljene naloge in jih potrdi z gumbom. Zapišeta se izbrano ime in datum potrditve. S ponovno odstranitvijo kljukice se naloga odpre, zgodovina potrditev pa ostane shranjena. Sodelavčevo ime je izbira obiskovalca, ne preverjena identiteta; uporabnik lahko izbere tudi drugo ime s seznama. Upraviteljske pravice vedno zahtevajo skrbniški PIN. Potrditev upravitelja se zabeleži kot »Upravitelj«. Odprta aplikacija osveži podatke vsakih 30 sekund in ob vrnitvi v okno; na voljo je tudi »Osveži«. Nalogo lahko izbrišeš s košem. Brisanje projekta odstrani tudi njegove naloge, seznam sodelavcev pa ohrani.
+
+## Skrbniški PIN in pogled sodelavca
+Nastavi ADMIN_PIN samo v `.env` na strežniku. PIN se nikoli ne vrača v API odgovorih ali shrani v Git. Na začetni strani upravitelj izbere »Upravitelj« in vnese PIN; sodelavec izbere »Sodelavec« in svoje ime brez PIN-a. API sodelavcu vrne samo dodeljene naloge in minimalne podatke pripadajočih projektov. Sodelavec ne more odpirati PDF-jev, brisati projektov ali spreminjati nalog drugega izbranega imena. Izbira drugega imena v vstopnem seznamu je dovoljena, kot zahteva ta način uporabe. Seja uporablja HttpOnly/SameSite piškotek in traja največ 12 ur; ob ponovnem zagonu se je treba znova prijaviti. Upravitelj ima gumb »Odjava«, sodelavec »Zamenjaj ime«. Po osmih napačnih poskusih skrbniškega PIN-a se prijava za 15 minut omeji.

@@ -4,6 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {PDFDocument} from 'pdf-lib';
+import {createAuth} from './auth.mjs';
 const root=path.resolve(process.env.DATA_DIR||'data'),dist=path.resolve(process.env.STATIC_DIR||fileURLToPath(new URL('../dist/',import.meta.url)));
 const origin=process.env.APP_ORIGIN;
 await mkdir(path.join(root,'meta'),{recursive:true});await mkdir(path.join(root,'files'),{recursive:true});
@@ -15,18 +16,30 @@ async function readBody(req,limit){const chunks=[];let size=0;for await(const ch
 const meta=id=>path.join(root,'meta',id+'.json');
 async function get(id){try{const record=JSON.parse(await readFile(meta(id),'utf8'));if(record.type==='document'&&!record.delivery)record.delivery=1;return record;}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 async function put(id,value){const file=meta(id),temp=file+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(value),{mode:0o600});await rename(temp,file);}
+async function listPeople(){const names=(await readdir(path.join(root,'meta'))).filter(n=>n.startsWith('u-')&&n.endsWith('.json'));return (await Promise.all(names.map(n=>get(n.slice(0,-5))))).filter(Boolean);}
+const auth=createAuth({adminPin:process.env.ADMIN_PIN,origin,getPerson:id=>get('u-'+id),listPeople});
+function sameOrigin(req){const value=req.headers.origin;try{return !value||(origin?value===origin:new URL(value).host===req.headers.host);}catch{return false;}}
 async function handle(req,res){
  const url=new URL(req.url,'http://localhost');
  if(url.pathname==='/health'){return json(res,200,{status:'ok'});}
  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','SAMEORIGIN');
+ if(url.pathname==='/api/auth/people'&&req.method==='GET')return json(res,200,await auth.people());
+ if(url.pathname==='/api/auth'){
+  if(req.method==='GET'){const user=auth.session(req);return user?json(res,200,{role:user.role,name:user.name,personId:user.personId}):json(res,401,{error:'Potrebna je prijava s PIN-om.'});}
+  if(!sameOrigin(req))return json(res,403,{error:'Nedovoljen izvor.'});
+  if(req.method==='POST'){const body=JSON.parse((await readBody(req,16384)).toString());const result=await auth.login(req,res,body);return json(res,result.status,result.user||{error:result.error});}
+  if(req.method==='DELETE'){auth.logout(req,res);return json(res,200,{ok:true});}return json(res,405,{error:'Nedovoljena metoda.'});
+ }
  if(url.pathname==='/api/data'){
+  const session=auth.session(req);if(!session)return json(res,401,{error:'Potrebna je prijava s PIN-om.'});
   const id=url.searchParams.get('id'),kind=url.searchParams.get('kind');
   if(req.method==='GET'){
-   if(kind==='file'){if(!valid(id))return json(res,400,{error:'Napačen dokument.'});try{const bytes=await readFile(path.join(root,'files',id+'.pdf'));res.writeHead(200,{'Content-Type':'application/pdf','Content-Disposition':'inline','Cache-Control':'no-store'});res.end(bytes);}catch(e){if(e.code==='ENOENT')return json(res,404,{error:'PDF ni najden.'});throw e;}return;}
+   if(kind==='file'){if(session.role!=='admin')return json(res,403,{error:'PDF-ji so na voljo upravitelju.'});if(!valid(id))return json(res,400,{error:'Napačen dokument.'});try{const bytes=await readFile(path.join(root,'files',id+'.pdf'));res.writeHead(200,{'Content-Type':'application/pdf','Content-Disposition':'inline','Cache-Control':'no-store'});res.end(bytes);}catch(e){if(e.code==='ENOENT')return json(res,404,{error:'PDF ni najden.'});throw e;}return;}
    const names=(await readdir(path.join(root,'meta'))).filter(n=>n.endsWith('.json'));
-   const rows=await Promise.all(names.map(n=>get(n.slice(0,-5))));return json(res,200,rows.filter(Boolean));
+   const rows=await Promise.all(names.map(n=>get(n.slice(0,-5))));if(session.role==='staff'){const tasks=rows.filter(r=>r?.type==='task'&&r.assigneeId===session.personId);const projectIds=new Set(tasks.map(t=>t.project));const projects=rows.filter(r=>r?.type==='project'&&projectIds.has(r.id)).map(p=>({type:'project',id:p.id,name:p.name,number:p.number}));return json(res,200,[...projects,...tasks]);}return json(res,200,rows.filter(Boolean));
   }
-  const reqOrigin=req.headers.origin;if(reqOrigin&&(origin?reqOrigin!==origin:new URL(reqOrigin).host!==req.headers.host))return json(res,403,{error:'Nedovoljen izvor.'});
+  if(!sameOrigin(req))return json(res,403,{error:'Nedovoljen izvor.'});
+  if(session.role!=='admin'&&!(req.method==='PATCH'&&kind==='task'))return json(res,403,{error:'Ta možnost je na voljo upravitelju.'});
   if(req.method==='POST'&&kind==='person'){
    const body=JSON.parse((await readBody(req,16384)).toString());if(typeof body.name!=='string'||!body.name.trim()||body.name.trim().length>80)return json(res,400,{error:'Vpiši ime sodelavca (največ 80 znakov).'});
    return locked(async()=>{const name=body.name.trim();const names=(await readdir(path.join(root,'meta'))).filter(n=>n.startsWith('u-')&&n.endsWith('.json'));const people=await Promise.all(names.map(n=>get(n.slice(0,-5))));const existing=people.find(p=>p&&p.name.toLocaleLowerCase()===name.toLocaleLowerCase());if(existing)return json(res,200,existing);const person={type:'person',id:randomUUID(),name,created:new Date().toISOString()};await put('u-'+person.id,person);json(res,200,person);});
@@ -36,8 +49,8 @@ async function handle(req,res){
    return locked(async()=>{const p=await get('p-'+body.project),person=await get('u-'+body.assigneeId);if(!p||!person)return json(res,404,{error:'Projekt ali sodelavec ni najden.'});const task={type:'task',id:randomUUID(),project:body.project,title:body.title.trim(),assigneeId:person.id,assigneeName:person.name,done:false,confirmedBy:null,confirmedAt:null,history:[],created:new Date().toISOString()};await put('t-'+task.id,task);json(res,200,task);});
   }
   if(req.method==='PATCH'&&kind==='task'){
-   if(!valid(id))return json(res,400,{error:'Napačna naloga.'});const body=JSON.parse((await readBody(req,16384)).toString());if(typeof body.done!=='boolean'||!valid(body.actorId))return json(res,400,{error:'Izberi svoje ime.'});
-   return locked(async()=>{const task=await get('t-'+id),actor=await get('u-'+body.actorId);if(!task||!actor)return json(res,404,{error:'Naloga ali sodelavec ni najden.'});if(task.assigneeId!==actor.id)return json(res,403,{error:'Nalogo potrdi zadolženi sodelavec. Izberi njegovo ime.'});if(task.done===body.done)return json(res,200,task);const at=new Date().toISOString();task.done=body.done;task.confirmedBy=body.done?actor.name:null;task.confirmedAt=body.done?at:null;task.history=[...(task.history||[]),{done:body.done,by:actor.name,at}];await put('t-'+id,task);json(res,200,task);});
+   if(!valid(id))return json(res,400,{error:'Napačna naloga.'});const body=JSON.parse((await readBody(req,16384)).toString());if(typeof body.done!=='boolean')return json(res,400,{error:'Napačna potrditev.'});
+   return locked(async()=>{const task=await get('t-'+id),actor=session.role==='admin'?{id:'admin',name:'Upravitelj'}:await get('u-'+session.personId);if(!task||!actor)return json(res,404,{error:'Naloga ali sodelavec ni najden.'});if(session.role!=='admin'&&task.assigneeId!==actor.id)return json(res,403,{error:'Ta naloga ni dodeljena tebi.'});if(task.done===body.done)return json(res,200,task);const at=new Date().toISOString();task.done=body.done;task.confirmedBy=body.done?actor.name:null;task.confirmedAt=body.done?at:null;task.history=[...(task.history||[]),{done:body.done,by:actor.name,at}];await put('t-'+id,task);json(res,200,task);});
   }
   if(req.method==='DELETE'&&kind==='task'){
    if(!valid(id))return json(res,400,{error:'Napačna naloga.'});return locked(async()=>{if(!await get('t-'+id))return json(res,404,{error:'Naloga ni najdena.'});await unlink(meta('t-'+id));json(res,200,{deleted:[id]});});
