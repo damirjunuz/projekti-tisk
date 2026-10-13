@@ -24,6 +24,19 @@ test('Only the admin PIN exposes projects; a selected coworker receives only ass
   const staff=await login({role:'staff',personId:maid.id});const session=await (await request('GET','/api/auth',null,staff)).json();assert.equal(session.role,'staff');assert.equal(session.name,'Maid');
   const visible=await (await request('GET','/api/data',null,staff)).json();assert.deepEqual(visible.map(r=>r.id).sort(),[p1.id,mine.id].sort());assert.equal(visible.some(r=>r.type==='document'||r.type==='person'),false);
   assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,staff)).status,403);
+  await request('PATCH','/api/data?id='+doc.id,{pages:[1],printed:true},admin);
+  const moved=await (await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:maid.id},admin)).json();assert.equal(moved[0].assigneeName,'Maid');assert.deepEqual(moved[0].printed,[1]);
+  let folder=await (await request('GET','/api/data',null,staff)).json();assert.equal(folder.some(r=>r.id===doc.id),true);assert.equal(folder.some(r=>r.id===notMine.id),false);
+  const pdfResponse=await request('GET','/api/data?kind=file&id='+doc.id,null,staff);assert.equal(pdfResponse.status,200);assert.equal(pdfResponse.headers.get('content-type'),'application/pdf');
+  assert.equal((await request('HEAD','/api/data?kind=file&id='+doc.id,null,staff)).status,200);
+  assert.equal((await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:other.id},staff)).status,403);
+  await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:other.id},admin);assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,staff)).status,403);
+  folder=await (await request('GET','/api/data',null,staff)).json();assert.equal(folder.some(r=>r.id===doc.id),false);
+  const otherSession=await login({role:'staff',personId:other.id});assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,otherSession)).status,200);
+  await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:null},admin);assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,otherSession)).status,403);
+  const adminRows=await (await request('GET','/api/data',null,admin)).json();assert.equal(adminRows.filter(r=>r.id===doc.id).length,1);assert.deepEqual(adminRows.find(r=>r.id===doc.id).printed,[1]);assert.equal(adminRows.find(r=>r.id===doc.id).assigneeId,null);
+  assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,admin)).status,200);
+
   assert.equal((await request('DELETE','/api/data?kind=project&id='+p1.id,null,staff)).status,403);
   assert.equal((await request('POST','/api/data?kind=person',{name:'Bypass'},staff)).status,403);
   assert.equal((await request('PATCH','/api/data?kind=project&id='+p1.id,{printStamp:'8'},staff)).status,403);
