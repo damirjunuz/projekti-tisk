@@ -20,7 +20,10 @@ test('Password-free upload, concurrent marks, undo and restart persistence',asyn
  const asset=await fetch(base+'/assets/app.js');assert.equal(asset.status,200);assert.equal(await asset.text(),'console.log("ok");');
  assert.equal((await fetch(base+'/%2e%2e%2fpackage.json')).status,403);
 const anonymous=await fetch(base+'/api/data');assert.equal(anonymous.status,200);assert.equal(anonymous.headers.has('www-authenticate'),false);
- const p=await (await request('POST','',{name:'Test project'})).json();const pdf=await PDFDocument.create();pdf.addPage();pdf.addPage();pdf.addPage();const d=await (await request('POST','?kind=upload&project='+p.id+'&group=SDe08%20-%20I.%20del&name=test.pdf',await pdf.save())).json();assert.equal(d.pages,3);assert.equal(d.group,'SDe08 - I. del');
+ const p=await (await request('POST','',{name:'Test project'})).json();assert.equal(p.nextDelivery,1);assert.equal((await request('PATCH','?kind=finish-delivery&id='+p.id,{delivery:1})).status,400);const pdf=await PDFDocument.create();pdf.addPage();pdf.addPage();pdf.addPage();const d=await (await request('POST','?kind=upload&project='+p.id+'&group=SDe08%20-%20I.%20del&name=test.pdf',await pdf.save())).json();assert.equal(d.pages,3);assert.equal(d.group,'SDe08 - I. del');
+ const closed=await (await request('PATCH','?kind=finish-delivery&id='+p.id,{delivery:1})).json();assert.deepEqual(closed.completedDeliveries,[1]);assert.equal(closed.nextDelivery,2);
+ const closedAgain=await (await request('PATCH','?kind=finish-delivery&id='+p.id,{delivery:1})).json();assert.equal(closedAgain.nextDelivery,2);assert.deepEqual(closedAgain.completedDeliveries,[1]);
+
  const projectUpdated=await (await request('PATCH','?kind=project&id='+p.id,{printStamp:'7'})).json();assert.equal(projectUpdated.printStamp,'7');
  assert.equal((await request('PATCH','?kind=project&id='+p.id,{printStamp:'x'})).status,400);
  await Promise.all([request('PATCH','?id='+d.id,{pages:[1],printed:true}),request('PATCH','?id='+d.id,{pages:[2],printed:true})]);
@@ -28,11 +31,11 @@ const anonymous=await fetch(base+'/api/data');assert.equal(anonymous.status,200)
  assert.equal((await request('PATCH','?id='+d.id,{pages:[4],printed:true})).status,400);
  const csrf=await fetch(base+'/api/data',{method:'POST',headers:{Origin:'https://bad.example'},body:'{}'});assert.equal(csrf.status,403);
  const moved=await (await request('PATCH','?kind=group&id='+d.id,{group:'SDe08 - II. del'})).json();assert.equal(moved.group,'SDe08 - II. del');assert.deepEqual(moved.printed,[1,2]);
- await request('PATCH','?id='+d.id,{pages:[1],printed:false});await stop();await launch();rows=await (await request('GET')).json();assert.deepEqual(rows.find(x=>x.id===d.id).printed,[2]);assert.equal(rows.find(x=>x.id===d.id).group,'SDe08 - II. del');assert.equal(rows.find(x=>x.id===p.id).printStamp,'7');
+ await request('PATCH','?id='+d.id,{pages:[1],printed:false});await stop();await launch();rows=await (await request('GET')).json();assert.deepEqual(rows.find(x=>x.id===d.id).printed,[2]);assert.equal(rows.find(x=>x.id===d.id).group,'SDe08 - II. del');assert.equal(rows.find(x=>x.id===p.id).printStamp,'7');assert.equal(rows.find(x=>x.id===p.id).nextDelivery,2);assert.deepEqual(rows.find(x=>x.id===p.id).completedDeliveries,[1]);
  assert.equal((await request('GET','?kind=file&id='+d.id)).headers.get('content-type'),'application/pdf');
- const d2=await (await request('POST','?kind=upload&project='+p.id+'&name=second.pdf',await pdf.save())).json();assert.equal(d2.delivery,1);
- const p2=await (await request('POST','',{name:'Keep this project'})).json();const d3=await (await request('POST','?kind=upload&project='+p2.id+'&name=keep.pdf',await pdf.save())).json();
- const assigned=await (await request('PATCH','?kind=delivery',{ids:[d.id,d2.id],delivery:2})).json();assert.equal(assigned.length,2);assert.equal(assigned[0].delivery,2);assert.deepEqual(assigned[0].printed,[2]);
+ const d2=await (await request('POST','?kind=upload&project='+p.id+'&name=second.pdf',await pdf.save())).json();assert.equal(d2.delivery,1);rows=await (await request('GET')).json();assert.deepEqual(rows.find(x=>x.id===p.id).completedDeliveries,[]);assert.equal(rows.find(x=>x.id===p.id).nextDelivery,2);
+ const p2=await (await request('POST','',{name:'Keep this project'})).json();const d3=await (await request('POST','?kind=upload&project='+p2.id+'&name=keep.pdf',await pdf.save())).json();const legacy={...d3};delete legacy.delivery;await writeFile(path.join(dir,'meta','d-'+d3.id+'.json'),JSON.stringify(legacy));rows=await (await request('GET')).json();assert.equal(rows.find(x=>x.id===d3.id).delivery,1);
+ const assigned=await (await request('PATCH','?kind=delivery',{ids:[d.id,d2.id],delivery:2})).json();assert.equal(assigned.length,2);assert.equal(assigned[0].delivery,2);const next=await (await request('PATCH','?kind=finish-delivery&id='+p.id,{delivery:2})).json();assert.equal(next.nextDelivery,3);assert.deepEqual(next.completedDeliveries,[2]);assert.deepEqual(assigned[0].printed,[2]);
  assert.equal((await request('PATCH','?kind=delivery',{ids:[d.id],delivery:100})).status,400);
  assert.equal((await request('DELETE','',{ids:['missing-document']})).status,404);
  const deleted=await (await request('DELETE','',{ids:[d.id]})).json();assert.deepEqual(deleted.deleted,[d.id]);assert.equal((await request('GET','?kind=file&id='+d.id)).status,404);

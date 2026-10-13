@@ -13,7 +13,7 @@ const valid=s=>typeof s==='string'&&/^[a-zA-Z0-9-]{1,80}$/.test(s);
 const json=(res,status,value)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(value));};
 async function readBody(req,limit){const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>limit){const e=Error('Datoteka je prevelika.');e.status=413;throw e;}chunks.push(chunk);}return Buffer.concat(chunks);}
 const meta=id=>path.join(root,'meta',id+'.json');
-async function get(id){try{return JSON.parse(await readFile(meta(id),'utf8'));}catch(e){if(e.code==='ENOENT')return null;throw e;}}
+async function get(id){try{const record=JSON.parse(await readFile(meta(id),'utf8'));if(record.type==='document'&&!record.delivery)record.delivery=1;return record;}catch(e){if(e.code==='ENOENT')return null;throw e;}}
 async function put(id,value){const file=meta(id),temp=file+'.'+randomUUID()+'.tmp';await writeFile(temp,JSON.stringify(value),{mode:0o600});await rename(temp,file);}
 async function handle(req,res){
  const url=new URL(req.url,'http://localhost');
@@ -32,11 +32,19 @@ async function handle(req,res){
    const delivery=Number(url.searchParams.get('delivery')||1);if(!Number.isInteger(delivery)||delivery<1||delivery>99)return json(res,400,{error:'Napačna številka pošiljke.'});
    const bytes=await readBody(req,40*1024*1024);let pdf;try{pdf=await PDFDocument.load(bytes);}catch{return json(res,400,{error:'PDF je poškodovan ali zaklenjen z geslom.'});}
    const doc={type:'document',id:randomUUID(),project,delivery,group:(url.searchParams.get('group')||'').trim().slice(0,160),name:(url.searchParams.get('name')||'Dokument.pdf').slice(0,240),pages:pdf.getPageCount(),printed:[],created:new Date().toISOString(),updated:new Date().toISOString()};
-   const file=path.join(root,'files',doc.id+'.pdf');await writeFile(file,bytes,{mode:0o600});try{await put('d-'+doc.id,doc);}catch(e){await unlink(file);throw e;}return json(res,200,doc);
+   const file=path.join(root,'files',doc.id+'.pdf');await writeFile(file,bytes,{mode:0o600});try{await put('d-'+doc.id,doc);}catch(e){await unlink(file);throw e;}await locked(async()=>{const p=await get('p-'+project);if(p?.completedDeliveries?.includes(delivery)){p.completedDeliveries=p.completedDeliveries.filter(n=>n!==delivery);await put('p-'+project,p);}});return json(res,200,doc);
   }
   if(req.method==='POST'){
    const body=JSON.parse((await readBody(req,16384)).toString());if(typeof body.name!=='string'||!body.name.trim())return json(res,400,{error:'Vpiši ime projekta.'});
-   const p={type:'project',id:randomUUID(),name:body.name.trim().slice(0,160),number:typeof body.number==='string'?body.number.slice(0,80):'',printStamp:'5',created:new Date().toISOString()};await put('p-'+p.id,p);return json(res,200,p);
+   const p={type:'project',id:randomUUID(),name:body.name.trim().slice(0,160),number:typeof body.number==='string'?body.number.slice(0,80):'',printStamp:'5',completedDeliveries:[],nextDelivery:1,created:new Date().toISOString()};await put('p-'+p.id,p);return json(res,200,p);
+  }
+  if(req.method==='PATCH'&&kind==='finish-delivery'){
+   if(!valid(id))return json(res,400,{error:'Napačen projekt.'});const body=JSON.parse((await readBody(req,16384)).toString());
+   if(!Number.isInteger(body.delivery)||body.delivery<1||body.delivery>=99)return json(res,400,{error:'Pošiljka mora biti med 1 in 98.'});
+   return locked(async()=>{const p=await get('p-'+id);if(!p)return json(res,404,{error:'Projekt ni najden.'});const names=(await readdir(path.join(root,'meta'))).filter(n=>n.startsWith('d-')&&n.endsWith('.json'));const documents=await Promise.all(names.map(n=>get(n.slice(0,-5))));
+    if(!documents.some(d=>d&&d.project===id&&d.delivery===body.delivery))return json(res,400,{error:'Najprej dodaj vsaj en PDF v to pošiljko.'});
+    p.completedDeliveries=[...new Set([...(p.completedDeliveries||[]),body.delivery])].sort((a,b)=>a-b);p.nextDelivery=Math.max(p.nextDelivery||1,body.delivery+1);await put('p-'+id,p);json(res,200,p);
+   });
   }
   if(req.method==='PATCH'&&kind==='delivery'){
    const body=JSON.parse((await readBody(req,16384)).toString());

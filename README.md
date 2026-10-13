@@ -41,3 +41,7 @@ Za načrte, prejete v več pošiljkah, izberi obstoječi projekt in v polje »Sk
 
 ## Izbor, pošiljke in brisanje
 Kljukice ob PDF-jih izberejo dokumente. V polju »Številka pošiljke« določi 1., 2. itd., nato uporabi »Označi N. pošiljko«. Ta oznaka velja tudi za nove PDF-je in se izpiše v zgornjem robu PDF-ja za tisk. Filter »Prikaži pošiljko« loči načrte, prejete v več delih. Skupine ostanejo ločene oznake za fasado ali vrsto načrtov. Gumb »Izbriši izbrane« odstrani izbrane PDF-je in njihovo evidenco, ko brisanje potrdiš. Pri odprtem dokumentu je na voljo tudi koš za posamično brisanje. »Izbriši projekt« po potrditvi odstrani celoten projekt in njegove PDF-je.
+
+## Zaključek pošiljke
+Po uvozu vseh PDF-jev v trenutno pošiljko klikni »Vsi PDF-ji v tej pošiljki so dodani«. Pošiljka se shrani kot zaključena in za naslednji uvoz se samodejno izbere naslednja številka. Stanje ostane shranjeno po osvežitvi ali ponovnem zagonu. Podvojena zahteva za zaključek iste pošiljke ne preskoči številke. Če pozneje dodaš PDF v že zaključeno pošiljko, se ta ponovno odpre; pripravljena naslednja številka se ohrani.
+Stari PDF-ji brez številke pošiljke se obravnavajo kot 1. pošiljka; z izborom dokumentov jih lahko preoznačiš.
