@@ -30,12 +30,22 @@ async function handle(req,res){
   if(req.method==='POST'&&kind==='upload'){
    const project=url.searchParams.get('project');if(!valid(project)||!await get('p-'+project))return json(res,400,{error:'Projekt ne obstaja.'});
    const bytes=await readBody(req,40*1024*1024);let pdf;try{pdf=await PDFDocument.load(bytes);}catch{return json(res,400,{error:'PDF je poškodovan ali zaklenjen z geslom.'});}
-   const doc={type:'document',id:randomUUID(),project,name:(url.searchParams.get('name')||'Dokument.pdf').slice(0,240),pages:pdf.getPageCount(),printed:[],created:new Date().toISOString(),updated:new Date().toISOString()};
+   const doc={type:'document',id:randomUUID(),project,group:(url.searchParams.get('group')||'').trim().slice(0,160),name:(url.searchParams.get('name')||'Dokument.pdf').slice(0,240),pages:pdf.getPageCount(),printed:[],created:new Date().toISOString(),updated:new Date().toISOString()};
    const file=path.join(root,'files',doc.id+'.pdf');await writeFile(file,bytes,{mode:0o600});try{await put('d-'+doc.id,doc);}catch(e){await unlink(file);throw e;}return json(res,200,doc);
   }
   if(req.method==='POST'){
    const body=JSON.parse((await readBody(req,16384)).toString());if(typeof body.name!=='string'||!body.name.trim())return json(res,400,{error:'Vpiši ime projekta.'});
-   const p={type:'project',id:randomUUID(),name:body.name.trim().slice(0,160),number:typeof body.number==='string'?body.number.slice(0,80):'',created:new Date().toISOString()};await put('p-'+p.id,p);return json(res,200,p);
+   const p={type:'project',id:randomUUID(),name:body.name.trim().slice(0,160),number:typeof body.number==='string'?body.number.slice(0,80):'',printStamp:'5',created:new Date().toISOString()};await put('p-'+p.id,p);return json(res,200,p);
+  }
+  if(req.method==='PATCH'&&kind==='project'){
+   if(!valid(id))return json(res,400,{error:'Napačen projekt.'});const body=JSON.parse((await readBody(req,16384)).toString());
+   if(typeof body.printStamp!=='string'||!/^\d{1,6}$/.test(body.printStamp))return json(res,400,{error:'Vpiši številko za tisk (1–6 mest).'});
+   return locked(async()=>{const p=await get('p-'+id);if(!p)return json(res,404,{error:'Projekt ni najden.'});p.printStamp=body.printStamp;await put('p-'+id,p);json(res,200,p);});
+  }
+  if(req.method==='PATCH'&&kind==='group'){
+   if(!valid(id))return json(res,400,{error:'Napačen dokument.'});const body=JSON.parse((await readBody(req,16384)).toString());
+   if(typeof body.group!=='string'||body.group.length>160)return json(res,400,{error:'Ime skupine je predolgo.'});
+   return locked(async()=>{const d=await get('d-'+id);if(!d)return json(res,404,{error:'Dokument ni najden.'});d.group=body.group.trim();d.updated=new Date().toISOString();await put('d-'+id,d);json(res,200,d);});
   }
   if(req.method==='PATCH'){
    if(!valid(id))return json(res,400,{error:'Napačen dokument.'});const body=JSON.parse((await readBody(req,1024*1024)).toString());
@@ -52,3 +62,4 @@ async function handle(req,res){
 const server=http.createServer((req,res)=>{handle(req,res).catch(e=>{console.error('Request failed:',e.code||e.name);if(!res.headersSent)json(res,e.status||500,{error:e.status===413?'PDF je prevelik (največ 40 MB).':'Operacija ni uspela.'});else res.destroy();});});
 server.listen(Number(process.env.PORT||3100),process.env.HOST||'0.0.0.0',()=>console.log('Projekti in tisk: pripravljen.'));
 for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>server.close(()=>process.exit(0)));
+

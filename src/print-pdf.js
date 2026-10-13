@@ -20,6 +20,10 @@ export async function createPrintPdf(bytes, pages, options = {}) {
   const labelWidth=Math.max(32,bold.widthOfTextAtSize(stamp,23)+16);
   page.drawRectangle({x:page.getWidth()-margin-labelWidth,y:page.getHeight()-top+7,width:labelWidth,height:29,borderColor:rgb(0,0,0),borderWidth:1,color:rgb(1,1,1)});
   page.drawText(stamp,{x:page.getWidth()-margin-labelWidth+(labelWidth-bold.widthOfTextAtSize(stamp,23))/2,y:page.getHeight()-top+12,size:23,font:bold});
+  let context=String(options.context||'').replace(/[\u2010-\u2015\u2212]/g,'-').normalize('NFD').replace(/\p{M}/gu,'').replace(/[^\x20-\x7E]/g,'?');
+  const available=page.getWidth()-2*margin-labelWidth-12;
+  while(context && font.widthOfTextAtSize(context,9)>available)context=context.slice(0,-1);
+  if(context)page.drawText(context,{x:margin,y:page.getHeight()-top+18,size:9,font});
   const label=`Stran ${start+i} / ${start+pages.length-1}`;
   page.drawText(label,{x:(page.getWidth()-font.widthOfTextAtSize(label,10))/2,y:10,size:10,font});
   const originalLabel=`Izvorna stran ${pages[i]}`;
@@ -27,3 +31,4 @@ export async function createPrintPdf(bytes, pages, options = {}) {
  }
  return out.save();
 }
+
