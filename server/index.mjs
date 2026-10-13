@@ -4,7 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {PDFDocument} from 'pdf-lib';
-const root=path.resolve(process.env.DATA_DIR||'data'),dist=fileURLToPath(new URL('../dist/',import.meta.url));
+const root=path.resolve(process.env.DATA_DIR||'data'),dist=path.resolve(process.env.STATIC_DIR||fileURLToPath(new URL('../dist/',import.meta.url)));
 const origin=process.env.APP_ORIGIN;
 await mkdir(path.join(root,'meta'),{recursive:true});await mkdir(path.join(root,'files'),{recursive:true});
 let queue=Promise.resolve();
