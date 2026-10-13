@@ -26,6 +26,20 @@ test('Only the admin PIN exposes projects; a selected coworker receives only ass
   assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,staff)).status,403);
   await request('PATCH','/api/data?id='+doc.id,{pages:[1],printed:true},admin);
   const moved=await (await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:maid.id},admin)).json();assert.equal(moved[0].assigneeName,'Maid');assert.deepEqual(moved[0].printed,[1]);
+  const part1=await (await request('POST','/api/data?kind=upload&project='+p1.id+'&delivery=1&name=part1.pdf',await pdf.save(),admin)).json();
+  const part2=await (await request('POST','/api/data?kind=upload&project='+p1.id+'&delivery=2&name=part2.pdf',await pdf.save(),admin)).json();
+  const foreign=await (await request('POST','/api/data?kind=upload&project='+p2.id+'&name=other.pdf',await pdf.save(),admin)).json();
+  await request('PATCH','/api/data?kind=document-owner',{ids:[part1.id,part2.id],assigneeId:maid.id},admin);
+  const partial=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id],done:true,actorId:other.id},staff)).json();assert.equal(partial[0].workDone,true);assert.equal(partial[0].workConfirmedBy,'Maid');assert.deepEqual(partial[0].printed,[1]);
+  let progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===part1.id).workDone,false);assert.equal(progress.find(d=>d.id===part2.id).workDone,false);
+  assert.equal((await request('PATCH','/api/data?kind=document-confirmation',{ids:[part1.id,foreign.id],done:true},staff)).status,403);
+  progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===part1.id).workDone,false);
+  const finished=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id,part1.id],done:true},staff)).json();assert.equal(finished.every(d=>d.workDone),true);
+  const again=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id,part1.id],done:true},staff)).json();assert.equal(again[0].workHistory.length,finished[0].workHistory.length);assert.equal(again[1].workConfirmedAt,finished[1].workConfirmedAt);
+  progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===part2.id).workDone,false);
+  await request('PATCH','/api/data?kind=document-confirmation',{ids:[part1.id],done:false},staff);progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===doc.id).workDone,true);assert.equal(progress.find(d=>d.id===part1.id).workDone,false);
+  const sameFolder=await (await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:maid.id},admin)).json();assert.equal(sameFolder[0].workDone,true);
+
   let folder=await (await request('GET','/api/data',null,staff)).json();assert.equal(folder.some(r=>r.id===doc.id),true);assert.equal(folder.some(r=>r.id===notMine.id),false);
   const pdfResponse=await request('GET','/api/data?kind=file&id='+doc.id,null,staff);assert.equal(pdfResponse.status,200);assert.equal(pdfResponse.headers.get('content-type'),'application/pdf');
   assert.equal((await request('HEAD','/api/data?kind=file&id='+doc.id,null,staff)).status,200);
@@ -34,7 +48,7 @@ test('Only the admin PIN exposes projects; a selected coworker receives only ass
   folder=await (await request('GET','/api/data',null,staff)).json();assert.equal(folder.some(r=>r.id===doc.id),false);
   const otherSession=await login({role:'staff',personId:other.id});assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,otherSession)).status,200);
   await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:null},admin);assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,otherSession)).status,403);
-  const adminRows=await (await request('GET','/api/data',null,admin)).json();assert.equal(adminRows.filter(r=>r.id===doc.id).length,1);assert.deepEqual(adminRows.find(r=>r.id===doc.id).printed,[1]);assert.equal(adminRows.find(r=>r.id===doc.id).assigneeId,null);
+  const adminRows=await (await request('GET','/api/data',null,admin)).json();assert.equal(adminRows.filter(r=>r.id===doc.id).length,1);assert.deepEqual(adminRows.find(r=>r.id===doc.id).printed,[1]);assert.equal(adminRows.find(r=>r.id===doc.id).assigneeId,null);assert.equal(adminRows.find(r=>r.id===doc.id).workDone,false);
   assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,admin)).status,200);
 
   assert.equal((await request('DELETE','/api/data?kind=project&id='+p1.id,null,staff)).status,403);

@@ -1,56 +1,66 @@
-# Projekti in tisk
-Ločena aplikacija za PDF projekte, pregled natisnjenih strani in pripravo PDF-ja za tisk.
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdtemp,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import {PDFDocument} from 'pdf-lib';
+test('Only the admin PIN exposes projects; a selected coworker receives only assigned tasks',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'tisk-access-')),socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
+ const base='http://127.0.0.1:'+port,adminPin='654321';
+ const child=spawn(process.execPath,['server/index.mjs'],{env:{...process.env,PORT:String(port),HOST:'127.0.0.1',DATA_DIR:dir,APP_ORIGIN:base,ADMIN_PIN:adminPin},stdio:['ignore','pipe','pipe']});
+ const request=(method,path='',body,cookie='')=>fetch(base+path,{method,headers:{...(cookie?{Cookie:cookie}:{}),...(body&&!(body instanceof Uint8Array)?{'Content-Type':'application/json'}:{})},body:body?(body instanceof Uint8Array?body:JSON.stringify(body)):undefined});
+ const login=async body=>{const r=await request('POST','/api/auth',body);assert.equal(r.status,200);const setCookie=r.headers.get('set-cookie');assert.match(setCookie,/HttpOnly/);assert.match(setCookie,/SameSite=Strict/);return setCookie.split(';')[0];};
+ try{
+  await new Promise((resolve,reject)=>{child.stdout.once('data',resolve);child.once('exit',()=>reject(Error('Server failed')));setTimeout(()=>reject(Error('Startup timeout')),10000).unref();});
+  assert.equal((await request('GET','/api/data')).status,401);assert.equal((await request('POST','/api/auth',{role:'admin',pin:'000000'})).status,401);
+  const admin=await login({role:'admin',pin:adminPin});
+  const maid=await (await request('POST','/api/data?kind=person',{name:'Maid'},admin)).json();const other=await (await request('POST','/api/data?kind=person',{name:'Drugi'},admin)).json();
+  const p1=await (await request('POST','/api/data',{name:'Projekt za Maida'},admin)).json(),p2=await (await request('POST','/api/data',{name:'Skriti projekt'},admin)).json();
+  const mine=await (await request('POST','/api/data?kind=task',{project:p1.id,title:'Pločevine',assigneeId:maid.id},admin)).json(),notMine=await (await request('POST','/api/data?kind=task',{project:p2.id,title:'Skrita naloga',assigneeId:other.id},admin)).json();
+  const pdf=await PDFDocument.create();pdf.addPage();const doc=await (await request('POST','/api/data?kind=upload&project='+p1.id,await pdf.save(),admin)).json();
+  const people=await (await request('GET','/api/auth/people')).json();assert.deepEqual(people.map(p=>p.name).sort(),['Drugi','Maid']);assert.deepEqual(Object.keys(people[0]).sort(),['id','name']);
+  const staff=await login({role:'staff',personId:maid.id});const session=await (await request('GET','/api/auth',null,staff)).json();assert.equal(session.role,'staff');assert.equal(session.name,'Maid');
+  const visible=await (await request('GET','/api/data',null,staff)).json();assert.deepEqual(visible.map(r=>r.id).sort(),[p1.id,mine.id].sort());assert.equal(visible.some(r=>r.type==='document'||r.type==='person'),false);
+  assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,staff)).status,403);
+  await request('PATCH','/api/data?id='+doc.id,{pages:[1],printed:true},admin);
+  const moved=await (await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:maid.id},admin)).json();assert.equal(moved[0].assigneeName,'Maid');assert.deepEqual(moved[0].printed,[1]);
+  const part1=await (await request('POST','/api/data?kind=upload&project='+p1.id+'&delivery=1&name=part1.pdf',await pdf.save(),admin)).json();
+  const part2=await (await request('POST','/api/data?kind=upload&project='+p1.id+'&delivery=2&name=part2.pdf',await pdf.save(),admin)).json();
+  const foreign=await (await request('POST','/api/data?kind=upload&project='+p2.id+'&name=other.pdf',await pdf.save(),admin)).json();
+  await request('PATCH','/api/data?kind=document-owner',{ids:[part1.id,part2.id],assigneeId:maid.id},admin);
+  const partial=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id],done:true,actorId:other.id},staff)).json();assert.equal(partial[0].workDone,true);assert.equal(partial[0].workConfirmedBy,'Maid');assert.deepEqual(partial[0].printed,[1]);
+  let progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===part1.id).workDone,false);assert.equal(progress.find(d=>d.id===part2.id).workDone,false);
+  assert.equal((await request('PATCH','/api/data?kind=document-confirmation',{ids:[part1.id,foreign.id],done:true},staff)).status,403);
+  progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===part1.id).workDone,false);
+  const finished=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id,part1.id],done:true},staff)).json();assert.equal(finished.every(d=>d.workDone),true);
+  const again=await (await request('PATCH','/api/data?kind=document-confirmation',{ids:[doc.id,part1.id],done:true},staff)).json();assert.equal(again[0].workHistory.length,finished[0].workHistory.length);assert.equal(again[1].workConfirmedAt,finished[1].workConfirmedAt);
+  progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===part2.id).workDone,false);
+  await request('PATCH','/api/data?kind=document-confirmation',{ids:[part1.id],done:false},staff);progress=await (await request('GET','/api/data',null,staff)).json();assert.equal(progress.find(d=>d.id===doc.id).workDone,true);assert.equal(progress.find(d=>d.id===part1.id).workDone,false);
+  const sameFolder=await (await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:maid.id},admin)).json();assert.equal(sameFolder[0].workDone,true);
 
-## Tisk
-Privzeta oznaka je **5**; spremeniš jo v polju »Številka za tisk«. Številko lahko shraniš za projekt. Gumb »Celoten PDF s številko« in gumbi za izbor strani pripravijo označen PDF, ga prenesejo in pokažejo predogled. Gumb »Odpri za tiskanje« odpre ta označen PDF. Izvirni predogled ima skrito orodno vrstico za tisk. Vsaka pripravljena stran dobi oznako zgoraj desno, zaporedno številko spodaj na sredini in številko izvorne strani spodaj levo. Začetno številko lahko določiš. Če izbereš izvorne strani 4, 8 in 12, je izpis »Stran 1 / 3« … »Stran 3 / 3« ter izvorna stran 4, 8, 12.
+  let folder=await (await request('GET','/api/data',null,staff)).json();assert.equal(folder.some(r=>r.id===doc.id),true);assert.equal(folder.some(r=>r.id===notMine.id),false);
+  const pdfResponse=await request('GET','/api/data?kind=file&id='+doc.id,null,staff);assert.equal(pdfResponse.status,200);assert.equal(pdfResponse.headers.get('content-type'),'application/pdf');
+  assert.equal((await request('HEAD','/api/data?kind=file&id='+doc.id,null,staff)).status,200);
+  assert.equal((await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:other.id},staff)).status,403);
+  await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:other.id},admin);assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,staff)).status,403);
+  folder=await (await request('GET','/api/data',null,staff)).json();assert.equal(folder.some(r=>r.id===doc.id),false);
+  const otherSession=await login({role:'staff',personId:other.id});assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,otherSession)).status,200);
+  await request('PATCH','/api/data?kind=document-owner',{ids:[doc.id],assigneeId:null},admin);assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,otherSession)).status,403);
+  const adminRows=await (await request('GET','/api/data',null,admin)).json();assert.equal(adminRows.filter(r=>r.id===doc.id).length,1);assert.deepEqual(adminRows.find(r=>r.id===doc.id).printed,[1]);assert.equal(adminRows.find(r=>r.id===doc.id).assigneeId,null);assert.equal(adminRows.find(r=>r.id===doc.id).workDone,false);
+  assert.equal((await request('GET','/api/data?kind=file&id='+doc.id,null,admin)).status,200);
 
-Načrt se v celoti prenese na novo stran z dodatnim prostorom za oznake. Razmerje in risba ostaneta ohranjena; velikost izhodnega lista je malo večja. V tiskalniku izberi A4/A3 in »Prilagodi velikosti papirja«. Za risbe v natančnem merilu uporabi izvirnik. Izvorni dokument se ne prepiše. Prenos ne označi strani kot natisnjene; to potrdiš po tiskanju. Vsak uvoz je ločen dokument, tudi pri enakem imenu.
-
-## Namestitev na strežnik
-Potrebna sta Docker Compose in obstoječe Caddy omrežje. Pred spremembami preveri prost port 3105, pravilno omrežje in DNS za izbrano domeno. Privzeti primer je `tisk.dservis.si`; domena ni samodejno nastavljena.
-
-1. Kopiraj `.env.example` v `.env` in nastavi `ADMIN_PIN` (6–12 številk), pravilni `APP_ORIGIN` in `CADDY_NETWORK`.
-2. Zaženi `docker compose up -d --build`.
-3. Dodaj v obstoječi Caddyfile blok (drugo vsebino ohrani):
-
-```caddy
- tisk.dservis.si {
-     reverse_proxy projekti-tisk:3100
- }
-```
-
-4. Preveri Caddy konfiguracijo in jo ponovno naloži. Lokalno zdravje preveri z `curl http://127.0.0.1:3105/health`; nato preveri zunanji HTTPS naslov.
-
-Upraviteljski pogled in PDF-ji so zaščiteni s skrbniškim PIN-om. Sodelavec izbere svoje ime brez PIN-a in vidi samo njemu dodeljene PDF-je in naloge ter njihove projekte. Podatki ostajajo v Docker volume `projekti_tisk_data`. Za varnostno kopijo ustavi aplikacijo in arhiviraj celoten volume; nato jo znova zaženi. Posodobitve ne smejo brisati volume-a (`docker compose down -v` izbriše podatke).
-
-## Razvoj in preverjanje
-`npm ci`, `npm test`, `npm run build`. Za razvoj zaženi strežnik z nastavljenim `ADMIN_PIN` in `DATA_DIR`, nato `npm run dev`. Za razvoj na Vite nastavi `APP_ORIGIN=http://localhost:5173`.
-
-## GitHub
-Repozitorij `damirjunuz/projekti-tisk` vsebuje preverjanje ob pushu in pull requestu. Samodejno nameščanje na strežnik se uredi po potrditvi njegove poti, dostopa in domene; paket ga še ne sproži. Gesla, podatkov in PDF-jev ne dodajaj v Git.
-
-## Prenos obstoječih podatkov
-Ta različica uporablja lokalne datoteke namesto Sites/R2. Projekti, PDF-ji in oznake iz obstoječe aplikacije se ne prenesejo samodejno. Pred preklopom je treba narediti izvoz iz obstoječe aplikacije in uvoz v novo; stara aplikacija naj ostane dostopna do preverjenega prenosa.
-
-## E-pošta
-Samodejni prevzem posredovanih PDF-jev še ni povezan. API je pripravljen za n8n: POST `/api/data` ustvari projekt, POST `/api/data?kind=upload&project=ID&name=IME.pdf` sprejme PDF. Administrativni API zdaj zahteva skrbniško sejo. Za bodočo povezavo z n8n bo treba posebej urediti servisni dostop. Pred uvozom poišči projekt preko GET `/api/data`, da ne ustvarjaš podvojenih projektov. Dokončna pravila za predmet sporočila in deduplikacijo se dogovorijo ob povezavi maila.
-
-
-## Skupine znotraj projekta
-Za načrte, prejete v več pošiljkah, izberi obstoječi projekt in v polje »Skupina novih PDF-jev« vpiši del projekta, npr. »SDe08 – I. del« ali »SDe08 – II. del«, nato klikni »Dodaj PDF«. Vsi izbrani PDF-ji dobijo to skupino. Po skupinah lahko filtriraš dokumente. Že naloženemu PDF-ju nastavi skupino v polju »Skupina / del projekta« in shrani. Sprememba skupine ohrani natisnjene strani. Skupina in številka naloga se izpišeta v zgornjem robu pripravljenega PDF-ja; dolga oznaka se skrajša na širino roba, šumniki v tej oznaki pa se pretvorijo v osnovne črke.
-
-## Izbor, pošiljke in brisanje
-Kljukice ob PDF-jih izberejo dokumente. V polju »Številka pošiljke« določi 1., 2. itd., nato uporabi »Označi N. pošiljko«. Ta oznaka velja tudi za nove PDF-je in se izpiše v zgornjem robu PDF-ja za tisk. Filter »Prikaži pošiljko« loči načrte, prejete v več delih. Skupine ostanejo ločene oznake za fasado ali vrsto načrtov. Gumb »Izbriši izbrane« odstrani izbrane PDF-je in njihovo evidenco, ko brisanje potrdiš. Pri odprtem dokumentu je na voljo tudi koš za posamično brisanje. »Izbriši projekt« po potrditvi odstrani celoten projekt in njegove PDF-je.
-
-## Zaključek pošiljke
-Po uvozu vseh PDF-jev v trenutno pošiljko klikni »Vsi PDF-ji v tej pošiljki so dodani«. Pošiljka se shrani kot zaključena in za naslednji uvoz se samodejno izbere naslednja številka. Stanje ostane shranjeno po osvežitvi ali ponovnem zagonu. Podvojena zahteva za zaključek iste pošiljke ne preskoči številke. Če pozneje dodaš PDF v že zaključeno pošiljko, se ta ponovno odpre; pripravljena naslednja številka se ohrani.
-Stari PDF-ji brez številke pošiljke se obravnavajo kot 1. pošiljka; z izborom dokumentov jih lahko preoznačiš.
-
-## Sodelavci in naloge
-V razdelku »Sodelavci in naloge« vpiši ime sodelavca, nato dodaj nalogo (npr. »Pločevine«) in izberi zadolženega. Imena so skupna vsem projektom, naloge pa pripadajo posameznemu projektu. Sodelavec odpre isti naslov, na začetni strani izbere »Sodelavec« in svoje ime; nato vidi samo dodeljene naloge in jih potrdi z gumbom. Zapišeta se izbrano ime in datum potrditve. S ponovno odstranitvijo kljukice se naloga odpre, zgodovina potrditev pa ostane shranjena. Sodelavčevo ime je izbira obiskovalca, ne preverjena identiteta; uporabnik lahko izbere tudi drugo ime s seznama. Upraviteljske pravice vedno zahtevajo skrbniški PIN. Potrditev upravitelja se zabeleži kot »Upravitelj«. Odprta aplikacija osveži podatke vsakih 30 sekund in ob vrnitvi v okno; na voljo je tudi »Osveži«. Nalogo lahko izbrišeš s košem. Brisanje projekta odstrani tudi njegove naloge, seznam sodelavcev pa ohrani.
-
-## Skrbniški PIN in pogled sodelavca
-Nastavi ADMIN_PIN samo v `.env` na strežniku. PIN se nikoli ne vrača v API odgovorih ali shrani v Git. Na začetni strani upravitelj izbere »Upravitelj« in vnese PIN; sodelavec izbere »Sodelavec« in svoje ime brez PIN-a. API sodelavcu vrne samo dodeljene naloge, PDF-je v njegovi mapi in minimalne podatke pripadajočih projektov. Sodelavec lahko odpre samo PDF-je v mapi izbranega imena. Ne more brisati projektov, premikati PDF-jev ali spreminjati nalog drugega izbranega imena. Izbira drugega imena v vstopnem seznamu je dovoljena, kot zahteva ta način uporabe. Seja uporablja HttpOnly/SameSite piškotek in traja največ 12 ur; ob ponovnem zagonu se je treba znova prijaviti. Upravitelj ima gumb »Odjava«, sodelavec »Zamenjaj ime«. Po osmih napačnih poskusih skrbniškega PIN-a se prijava za 15 minut omeji.
-
-## Mape sodelavcev
-V upraviteljskem pogledu obkljukaj PDF-je, izberi sodelavca v polju »Premakni označene PDF-je v mapo« in klikni »Premakni v mapo [ime]«. Vsak PDF ima eno mapo sodelavca, upravitelj pa ga še vedno vidi v celotnem projektu. Premik spremeni dodelitev in ne kopira datoteke; število PDF-jev, pošiljka, skupina in evidenca tiskanja se ohranijo. Sodelavec v svojem pogledu vidi »Moja mapa« z dodeljenimi PDF-ji in nalogami. Za vrnitev PDF-ja izberi »Moja mapa (odstrani dodelitev)« in »Vrni v mojo mapo«. Dostop do datoteke se preveri ob vsakem zahtevku; po premiku drugemu sodelavcu prejšnji izbrani pogled tega PDF-ja ne vidi več.
+  assert.equal((await request('DELETE','/api/data?kind=project&id='+p1.id,null,staff)).status,403);
+  assert.equal((await request('POST','/api/data?kind=person',{name:'Bypass'},staff)).status,403);
+  assert.equal((await request('PATCH','/api/data?kind=project&id='+p1.id,{printStamp:'8'},staff)).status,403);
+  assert.equal((await request('DELETE','/api/data?kind=task&id='+mine.id,null,staff)).status,403);
+  assert.equal((await request('PATCH','/api/data?kind=task&id='+notMine.id,{done:true,actorId:other.id,role:'admin'},staff)).status,403);
+  const confirmed=await (await request('PATCH','/api/data?kind=task&id='+mine.id,{done:true,actorId:other.id},staff)).json();assert.equal(confirmed.done,true);assert.equal(confirmed.confirmedBy,'Maid');
+  assert.equal((await request('POST','/api/auth',{role:'admin',personId:maid.id})).status,401);
+  await request('DELETE','/api/auth',null,staff);assert.equal((await request('GET','/api/data',null,staff)).status,401);
+  await request('DELETE','/api/auth',null,admin);assert.equal((await request('GET','/api/data',null,admin)).status,401);
+  for(let i=0;i<8;i++)await request('POST','/api/auth',{role:'admin',pin:'000000'});
+  assert.equal((await request('POST','/api/auth',{role:'admin',pin:adminPin})).status,429);
+ }finally{if(child.exitCode===null)await new Promise(r=>{child.once('exit',r);child.kill('SIGTERM');});await rm(dir,{recursive:true,force:true});}
+});
