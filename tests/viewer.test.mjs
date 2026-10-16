@@ -1,0 +1,64 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {spawn} from 'node:child_process';
+import {mkdtemp,rm,readFile,access} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import {PDFDocument,StandardFonts} from 'pdf-lib';
+import {searchPattern,createPdfSearch} from '../server/pdf-search.mjs';
+
+test('Drawing labels match exact identifiers and ignore case and letter-number spacing',()=>{
+ for(const text of ['H22','h22','Horizontal H 22 detail','H\n22'])assert.equal(searchPattern('h22').test(text),true,text);
+ for(const text of ['H220','AH22','H22A','_H22','V22'])assert.equal(searchPattern('H22').test(text),false,text);
+ assert.equal(searchPattern('V23').test('Vertikala V 23'),true);
+ assert.equal(searchPattern('a.b').test('a.b'),true);assert.equal(searchPattern('a.b').test('axb'),false);
+});
+
+test('View-only project access, PDF page search, revocation and persistence',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'tisk-viewer-')),socket=net.createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;await new Promise(r=>socket.close(r));
+ const base='http://127.0.0.1:'+port;let child;
+ const request=(method,url,body,cookie='')=>fetch(base+url,{method,headers:{...(cookie?{Cookie:cookie}:{}),...(body&&!(body instanceof Uint8Array)?{'Content-Type':'application/json'}:{})},body:body?(body instanceof Uint8Array?body:JSON.stringify(body)):undefined});
+ const data=(method,query,body,cookie)=>request(method,'/api/data'+query,body,cookie);
+ const login=async body=>{const r=await request('POST','/api/auth',body);assert.equal(r.status,200);return {user:await r.json(),cookie:r.headers.get('set-cookie').split(';')[0]};};
+ const start=async()=>{child=spawn(process.execPath,['server/index.mjs'],{env:{...process.env,HOST:'127.0.0.1',PORT:String(port),DATA_DIR:dir,APP_ORIGIN:base,ADMIN_PIN:'654321'},stdio:['ignore','pipe','pipe']});await new Promise((resolve,reject)=>{child.stdout.once('data',resolve);child.once('exit',()=>reject(Error('Server failed')));setTimeout(()=>reject(Error('Startup timeout')),10000).unref();});};
+ const stop=()=>new Promise(resolve=>{child.once('exit',resolve);child.kill('SIGTERM');});
+ const pdf=async texts=>{const p=await PDFDocument.create(),font=await p.embedFont(StandardFonts.Helvetica);for(const text of texts){const page=p.addPage();if(text)page.drawText(text,{x:40,y:600,size:20,font});}return p.save();};
+ try{
+  await start();let admin=(await login({role:'admin',pin:'654321'})).cookie;
+  const viewer=await (await data('POST','?kind=person',{name:'Pregled',access:'viewer'},admin)).json();assert.equal(viewer.access,'viewer');
+  assert.equal((await data('POST','?kind=person',{name:'Pregled'},admin)).status,409);
+  const worker=await (await data('POST','?kind=person',{name:'Maid'},admin)).json();
+  const project=await (await data('POST','',{name:'Fasada',number:'DN-16'},admin)).json(),hidden=await (await data('POST','',{name:'Skriti projekt'},admin)).json();
+  const drawing=await (await data('POST','?kind=upload&project='+project.id+'&name=nacrti.pdf&group=SDe08&delivery=2',await pdf(['H22 detail','H220 AH22 V230','Vertikala V23','']),admin)).json();
+  const secret=await (await data('POST','?kind=upload&project='+hidden.id+'&name=secret.pdf',await pdf(['H22 secret']),admin)).json();
+  const staffDoc=await (await data('POST','?kind=upload&project='+project.id+'&name=maid.pdf',await pdf(['h 22']),admin)).json();
+  await data('PATCH','?kind=document-owner',{ids:[staffDoc.id],assigneeId:worker.id},admin);
+  const task=await (await data('POST','?kind=task',{project:project.id,title:'Plocevine',assigneeId:worker.id},admin)).json();
+  const selected=await login({role:'staff',personId:viewer.id,access:'staff'});let viewerCookie=selected.cookie;assert.equal(selected.user.role,'viewer');
+  assert.deepEqual(await (await data('GET','',null,viewerCookie)).json(),[]);
+  assert.equal((await data('GET','?kind=file&id='+drawing.id,null,viewerCookie)).status,403);
+  assert.equal((await data('GET','?kind=search&project='+project.id+'&q=H22',null,viewerCookie)).status,403);
+  assert.equal((await data('PATCH','?kind=viewer-access&id='+project.id,{personIds:[worker.id]},admin)).status,400);
+  await data('PATCH','?kind=viewer-access&id='+project.id,{personIds:[viewer.id]},admin);
+  let rows=await (await data('GET','',null,viewerCookie)).json();assert.deepEqual(rows.map(r=>r.id).sort(),[project.id,drawing.id,staffDoc.id].sort());assert.equal(rows.some(r=>r.type==='task'||r.type==='person'),false);assert.equal(rows.find(r=>r.id===staffDoc.id).assigneeName,undefined);assert.equal(rows.find(r=>r.id===project.id).viewerIds,undefined);assert.equal(rows.find(r=>r.id===drawing.id).workHistory,undefined);
+  assert.equal((await data('GET','?kind=file&id='+drawing.id,null,viewerCookie)).status,200);assert.equal((await data('HEAD','?kind=file&id='+drawing.id,null,viewerCookie)).status,200);
+  assert.equal((await data('GET','?kind=file&id='+secret.id,null,viewerCookie)).status,403);
+  assert.equal((await data('GET','?kind=search&project='+hidden.id+'&q=H22',null,viewerCookie)).status,403);
+  for(const [method,url,body] of [['PATCH','?kind=document-confirmation',{ids:[drawing.id],done:true}],['PATCH','?kind=task&id='+task.id,{done:true}],['PATCH','?id='+drawing.id,{pages:[1],printed:true}],['PATCH','?kind=viewer-access&id='+project.id,{personIds:[]}],['POST','',{name:'Bypass'}],['DELETE','',{ids:[drawing.id]}]])assert.equal((await data(method,url,body,viewerCookie)).status,403,url);
+  assert.equal((await data('PATCH','?kind=document-owner',{ids:[drawing.id],assigneeId:viewer.id},admin)).status,400);
+  assert.equal((await data('POST','?kind=task',{project:project.id,title:'Wrong',assigneeId:viewer.id},admin)).status,400);
+  let results=await (await data('GET','?kind=search&project='+project.id+'&q=h22',null,viewerCookie)).json();assert.deepEqual(results.hits.map(h=>[h.name,h.page]).sort(),[['maid.pdf',1],['nacrti.pdf',1]]);assert.equal(results.emptyPages,1);assert.deepEqual(results.unreadable,[]);assert.equal(results.hits.find(h=>h.id===drawing.id).delivery,2);assert.match(results.hits.find(h=>h.id===drawing.id).snippet,/H22/);
+  results=await (await data('GET','?kind=search&project='+project.id+'&q=V23',null,viewerCookie)).json();assert.deepEqual(results.hits.map(h=>[h.id,h.page]),[[drawing.id,3]]);
+  const cache=JSON.parse(await readFile(path.join(dir,'search',drawing.id+'.json'),'utf8'));assert.equal(cache.pages.length,4);assert.match(cache.pages[2],/V23/);
+  assert.equal((await data('GET','?kind=search&project='+project.id+'&q=H22')).status,401);
+  assert.equal((await data('GET','?kind=search&project='+project.id+'&q=H',null,viewerCookie)).status,400);
+  const staff=(await login({role:'staff',personId:worker.id})).cookie;results=await (await data('GET','?kind=search&project='+project.id+'&q=H22',null,staff)).json();assert.deepEqual(results.hits.map(h=>h.id),[staffDoc.id]);assert.equal((await data('GET','?kind=search&project='+hidden.id+'&q=H22',null,staff)).status,403);
+  const newer=await (await data('POST','?kind=upload&project='+project.id+'&name=new.pdf&delivery=3',await pdf(['H22 new']),admin)).json();rows=await (await data('GET','',null,viewerCookie)).json();assert.equal(rows.some(r=>r.id===newer.id),true);
+  await stop();await start();admin=(await login({role:'admin',pin:'654321'})).cookie;viewerCookie=(await login({role:'staff',personId:viewer.id})).cookie;
+  results=await (await data('GET','?kind=search&project='+project.id+'&q=V23',null,viewerCookie)).json();assert.equal(results.hits[0].page,3);
+  await data('PATCH','?kind=viewer-access&id='+project.id,{personIds:[]},admin);assert.deepEqual(await (await data('GET','',null,viewerCookie)).json(),[]);assert.equal((await data('GET','?kind=file&id='+drawing.id,null,viewerCookie)).status,403);assert.equal((await data('GET','?kind=search&project='+project.id+'&q=H22',null,viewerCookie)).status,403);
+  await data('DELETE','',{ids:[drawing.id]},admin);await assert.rejects(access(path.join(dir,'search',drawing.id+'.json')));
+  const unreadable=await createPdfSearch(dir).search([{id:'missing',pages:1,name:'Missing.pdf'}],'H22');assert.equal(unreadable.unreadable[0].name,'Missing.pdf');assert.equal(unreadable.hits.length,0);
+ }finally{if(child?.exitCode===null)await stop();await rm(dir,{recursive:true,force:true});}
+});

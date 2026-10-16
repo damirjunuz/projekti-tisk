@@ -16,6 +16,14 @@ Mape sodelavca so razdeljene po projektu, skupini in pošiljki. Potrditi je mogo
 
 Potrditve strani hranijo ime izbrane seje in čas. Potrditev naloge je dovoljena šele, ko so v celoti potrjeni vsi PDF-ji tega projekta, dodeljeni istemu sodelavcu. Naloge brez dodeljenih PDF-jev se lahko potrdijo samostojno. Potrditev dela je ločena od evidence tiskanja. Dodelitev drugemu sodelavcu ponastavi potrditev dela; ponovna dodelitev istemu sodelavcu jo ohrani. Stare potrditve celotnih PDF-jev se ob branju prenesejo na vse njihove strani.
 
+## Pregledovalci in iskanje oznak
+
+Pri »Dodaj uporabnika« izberi vrsto dostopa **Pregled PDF-jev – brez sprememb**, vpiši ime in ga dodaj. V razdelku **Dostop za pregled tega projekta** označi njegovo ime pri vsakem dovoljenem projektu. Pregledovalec izbere ime na prijavni strani, nato projekt. Vidi vse PDF-je dovoljenega projekta, tudi nove pošiljke; ne more potrjevati dela, spreminjati tiskanja, dodajati ali brisati dokumentov. Dovoljenje je neodvisno od dodelitve dokumentov delavcem. Odstranitev kljukice prekliče nadaljnji dostop tudi v že odprti seji.
+
+Upravitelj in pregledovalec lahko iščeta po besedilu PDF-jev izbranega projekta, npr. **H22** ali **V23**. Rezultati vsebujejo ime PDF-ja, pošiljko, skupino, odlomek in številko strani. Gumb odpre zadeto stran. Iskanje razlikuje H22 od H220 ter upošteva male/velike črke in razmik med H/V in številko. Več zadetkov na isti strani pomeni en rezultat za to stran; prikazanih je največ 300 strani.
+
+Besedilo izlušči lokalni `pdftotext` iz paketa Poppler. Docker slika ga namesti samodejno; pri zagonu brez Dockerja mora biti ukaz nameščen v sistemu. Prvo iskanje pripravi predpomnilnik tudi za obstoječe PDF-je v `/data/search`. Ta je obnovljiv in se pri brisanju PDF-ja odstrani. Vsako iskanje znova preveri dostop do projektov in dokumentov. Skenirane strani brez besedila niso podprte za iskanje brez OCR; prazne/neberljive strani oziroma dokumenti so navedeni v rezultatu in jih je še vedno mogoče odpreti ročno.
+
 ## Namestitev
 
 Potrebna sta Docker Compose in Caddy. Kopiraj `.env.example` v `.env`, nastavi `ADMIN_PIN` (6–12 številk), `APP_ORIGIN` in `CADDY_NETWORK`, nato zaženi:

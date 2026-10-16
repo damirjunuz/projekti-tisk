@@ -18,7 +18,7 @@ export function createAuth({adminPin,origin,getPerson,listPeople}){
   let user=null;
   if(role==='admin'&&same(body.pin,adminSalt,adminHash))user={role:'admin',name:'Upravitelj'};
   if(role==='staff'&&typeof body.personId==='string'&&/^[a-zA-Z0-9-]{1,80}$/.test(body.personId)){
-   const p=await getPerson(body.personId);if(p)user={role:'staff',personId:p.id,name:p.name};
+   const p=await getPerson(body.personId);if(p)user={role:p.access==='viewer'?'viewer':'staff',personId:p.id,name:p.name};
   }
   if(!user){const previous=prior&&prior.until>Date.now()?prior.count:0;attempts.set(key,{count:previous+1,until:Date.now()+15*60*1000});if(attempts.size>5000){for(const [k,v] of attempts)if(v.until<Date.now())attempts.delete(k);}return {status:401,error:'Napačen PIN ali neveljaven sodelavec.'};}
   attempts.delete(key);for(const [k,v] of sessions)if(v.expires<Date.now())sessions.delete(k);
