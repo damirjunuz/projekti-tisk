@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdtemp,rm,readFile,access} from 'node:fs/promises';
+import {mkdtemp,rm,readFile,writeFile,access} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import net from 'node:net';
@@ -23,7 +23,7 @@ test('View-only project access, PDF page search, revocation and persistence',asy
  const login=async body=>{const r=await request('POST','/api/auth',body);assert.equal(r.status,200);return {user:await r.json(),cookie:r.headers.get('set-cookie').split(';')[0]};};
  const start=async()=>{child=spawn(process.execPath,['server/index.mjs'],{env:{...process.env,HOST:'127.0.0.1',PORT:String(port),DATA_DIR:dir,APP_ORIGIN:base,ADMIN_PIN:'654321'},stdio:['ignore','pipe','pipe']});await new Promise((resolve,reject)=>{child.stdout.once('data',resolve);child.once('exit',()=>reject(Error('Server failed')));setTimeout(()=>reject(Error('Startup timeout')),10000).unref();});};
  const stop=()=>new Promise(resolve=>{child.once('exit',resolve);child.kill('SIGTERM');});
- const pdf=async texts=>{const p=await PDFDocument.create(),font=await p.embedFont(StandardFonts.Helvetica);for(const text of texts){const page=p.addPage();if(text)page.drawText(text,{x:40,y:600,size:20,font});}return p.save();};
+ const pdf=async texts=>{const p=await PDFDocument.create(),font=await p.embedFont(StandardFonts.Helvetica);for(const [index,text] of texts.entries()){const page=p.addPage([600+index*10,800+index*10]);if(text)page.drawText(text,{x:40,y:600,size:20,font});}return p.save();};
  try{
   await start();let admin=(await login({role:'admin',pin:'654321'})).cookie;
   const viewer=await (await data('POST','?kind=person',{name:'Pregled',access:'viewer'},admin)).json();assert.equal(viewer.access,'viewer');
@@ -43,6 +43,13 @@ test('View-only project access, PDF page search, revocation and persistence',asy
   await data('PATCH','?kind=viewer-access&id='+project.id,{personIds:[viewer.id]},admin);
   let rows=await (await data('GET','',null,viewerCookie)).json();assert.deepEqual(rows.map(r=>r.id).sort(),[project.id,drawing.id,staffDoc.id].sort());assert.equal(rows.some(r=>r.type==='task'||r.type==='person'),false);assert.equal(rows.find(r=>r.id===staffDoc.id).assigneeName,undefined);assert.equal(rows.find(r=>r.id===project.id).viewerIds,undefined);assert.equal(rows.find(r=>r.id===drawing.id).workHistory,undefined);
   assert.equal((await data('GET','?kind=file&id='+drawing.id,null,viewerCookie)).status,200);assert.equal((await data('HEAD','?kind=file&id='+drawing.id,null,viewerCookie)).status,200);
+  const pageResponse=await data('GET','?kind=file&id='+drawing.id+'&page=3',null,viewerCookie);assert.equal(pageResponse.status,200);assert.equal(pageResponse.headers.get('content-type'),'application/pdf');assert.match(pageResponse.headers.get('content-disposition'),/stran-3.pdf/);const pageBytes=new Uint8Array(await pageResponse.arrayBuffer()),onePage=await PDFDocument.load(pageBytes);assert.equal(onePage.getPageCount(),1);assert.equal(onePage.getPage(0).getWidth(),620);assert.equal(onePage.getPage(0).getHeight(),820);
+  await writeFile(path.join(dir,'files','preview-v23.pdf'),pageBytes);const extractedText=await createPdfSearch(dir).search([{id:'preview-v23',pages:1,name:'Preview.pdf'}],'V23');assert.equal(extractedText.hits.length,1);assert.equal(extractedText.hits[0].page,1);assert.match(extractedText.hits[0].snippet,/V23/);assert.deepEqual((await createPdfSearch(dir).search([{id:'preview-v23',pages:1,name:'Preview.pdf'}],'H22')).hits,[]);
+  const original=await PDFDocument.load(await (await data('GET','?kind=file&id='+drawing.id,null,viewerCookie)).arrayBuffer());assert.equal(original.getPageCount(),4);
+  const headPage=await data('HEAD','?kind=file&id='+drawing.id+'&page=3',null,viewerCookie);assert.equal(headPage.status,200);assert.equal(await headPage.text(),'');
+  for(const page of ['0','5','1.5','foo','','-1'])assert.equal((await data('GET','?kind=file&id='+drawing.id+'&page='+page,null,viewerCookie)).status,400,page);
+  assert.equal((await data('GET','?kind=file&id='+drawing.id+'&page=3')).status,401);
+  assert.equal((await data('GET','?kind=file&id='+secret.id+'&page=1',null,viewerCookie)).status,403);
   assert.equal((await data('GET','?kind=file&id='+secret.id,null,viewerCookie)).status,403);
   assert.equal((await data('GET','?kind=search&project='+hidden.id+'&q=H22',null,viewerCookie)).status,403);
   for(const [method,url,body] of [['PATCH','?kind=document-confirmation',{ids:[drawing.id],done:true}],['PATCH','?kind=task&id='+task.id,{done:true}],['PATCH','?id='+drawing.id,{pages:[1],printed:true}],['PATCH','?kind=viewer-access&id='+project.id,{personIds:[]}],['POST','',{name:'Bypass'}],['DELETE','',{ids:[drawing.id]}]])assert.equal((await data(method,url,body,viewerCookie)).status,403,url);
@@ -60,6 +67,7 @@ test('View-only project access, PDF page search, revocation and persistence',asy
   assert.equal((await data('GET','?kind=search&project='+project.id+'&q=H',null,viewerCookie)).status,400);
   const staff=(await login({role:'staff',personId:worker.id})).cookie;results=await (await data('GET','?kind=search&project='+project.id+'&q=H22',null,staff)).json();assert.deepEqual(results.hits.map(h=>h.id),[staffDoc.id]);assert.equal((await data('GET','?kind=search&project='+hidden.id+'&q=H22',null,staff)).status,403);
   assert.equal((await data('GET','?kind=search&project='+project.id+'&document='+drawing.id+'&q=H22',null,staff)).status,403);
+  assert.equal((await data('GET','?kind=file&id='+drawing.id+'&page=3',null,staff)).status,403);assert.equal((await data('GET','?kind=file&id='+staffDoc.id+'&page=1',null,staff)).status,200);
   const workerScoped=await (await data('GET','?kind=search&project='+project.id+'&document='+staffDoc.id+'&q=H22',null,staff)).json();assert.equal(workerScoped.documents,1);assert.equal(workerScoped.hits[0].id,staffDoc.id);
   const newer=await (await data('POST','?kind=upload&project='+project.id+'&name=new.pdf&delivery=3',await pdf(['H22 new']),admin)).json();rows=await (await data('GET','',null,viewerCookie)).json();assert.equal(rows.some(r=>r.id===newer.id),true);
   await stop();await start();admin=(await login({role:'admin',pin:'654321'})).cookie;viewerCookie=(await login({role:'staff',personId:viewer.id})).cookie;
