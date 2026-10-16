@@ -50,10 +50,17 @@ test('View-only project access, PDF page search, revocation and persistence',asy
   assert.equal((await data('POST','?kind=task',{project:project.id,title:'Wrong',assigneeId:viewer.id},admin)).status,400);
   let results=await (await data('GET','?kind=search&project='+project.id+'&q=h22',null,viewerCookie)).json();assert.deepEqual(results.hits.map(h=>[h.name,h.page]).sort(),[['maid.pdf',1],['nacrti.pdf',1]]);assert.equal(results.emptyPages,1);assert.deepEqual(results.unreadable,[]);assert.equal(results.hits.find(h=>h.id===drawing.id).delivery,2);assert.match(results.hits.find(h=>h.id===drawing.id).snippet,/H22/);
   results=await (await data('GET','?kind=search&project='+project.id+'&q=V23',null,viewerCookie)).json();assert.deepEqual(results.hits.map(h=>[h.id,h.page]),[[drawing.id,3]]);
+  const scoped=await (await data('GET','?kind=search&project='+project.id+'&document='+drawing.id+'&q=H22',null,viewerCookie)).json();assert.equal(scoped.documents,1);assert.deepEqual(scoped.hits.map(h=>[h.id,h.page]),[[drawing.id,1]]);assert.equal(scoped.emptyPages,1);
+  const noCrossPdf=await (await data('GET','?kind=search&project='+project.id+'&document='+staffDoc.id+'&q=V23',null,viewerCookie)).json();assert.equal(noCrossPdf.documents,1);assert.deepEqual(noCrossPdf.hits,[]);assert.equal(noCrossPdf.emptyPages,0);
+  const adminScoped=await (await data('GET','?kind=search&project='+project.id+'&document='+drawing.id+'&q=V23',null,admin)).json();assert.equal(adminScoped.documents,1);assert.equal(adminScoped.hits[0].page,3);
+  assert.equal((await data('GET','?kind=search&project='+project.id+'&document='+secret.id+'&q=H22',null,viewerCookie)).status,403);assert.equal((await data('GET','?kind=search&project='+project.id+'&document='+secret.id+'&q=H22',null,admin)).status,403);
+  assert.equal((await data('GET','?kind=search&project='+project.id+'&document=../bad&q=H22',null,admin)).status,400);
   const cache=JSON.parse(await readFile(path.join(dir,'search',drawing.id+'.json'),'utf8'));assert.equal(cache.pages.length,4);assert.match(cache.pages[2],/V23/);
   assert.equal((await data('GET','?kind=search&project='+project.id+'&q=H22')).status,401);
   assert.equal((await data('GET','?kind=search&project='+project.id+'&q=H',null,viewerCookie)).status,400);
   const staff=(await login({role:'staff',personId:worker.id})).cookie;results=await (await data('GET','?kind=search&project='+project.id+'&q=H22',null,staff)).json();assert.deepEqual(results.hits.map(h=>h.id),[staffDoc.id]);assert.equal((await data('GET','?kind=search&project='+hidden.id+'&q=H22',null,staff)).status,403);
+  assert.equal((await data('GET','?kind=search&project='+project.id+'&document='+drawing.id+'&q=H22',null,staff)).status,403);
+  const workerScoped=await (await data('GET','?kind=search&project='+project.id+'&document='+staffDoc.id+'&q=H22',null,staff)).json();assert.equal(workerScoped.documents,1);assert.equal(workerScoped.hits[0].id,staffDoc.id);
   const newer=await (await data('POST','?kind=upload&project='+project.id+'&name=new.pdf&delivery=3',await pdf(['H22 new']),admin)).json();rows=await (await data('GET','',null,viewerCookie)).json();assert.equal(rows.some(r=>r.id===newer.id),true);
   await stop();await start();admin=(await login({role:'admin',pin:'654321'})).cookie;viewerCookie=(await login({role:'staff',personId:viewer.id})).cookie;
   results=await (await data('GET','?kind=search&project='+project.id+'&q=V23',null,viewerCookie)).json();assert.equal(results.hits[0].page,3);

@@ -42,11 +42,12 @@ async function handle(req,res){
   if(req.method==='GET'||(req.method==='HEAD'&&kind==='file')){
    if(kind==='file'){if(!valid(id))return json(res,400,{error:'Napačen dokument.'});const document=await get('d-'+id);if(!document)return json(res,404,{error:'PDF ni najden.'});if(!await canReadDocument(session,document))return json(res,403,{error:'Ta PDF ni v tvoji mapi.'});try{const bytes=await readFile(path.join(root,'files',id+'.pdf'));res.writeHead(200,{'Content-Type':'application/pdf','Content-Disposition':'inline','Cache-Control':'no-store'});res.end(req.method==='HEAD'?undefined:bytes);}catch(e){if(e.code==='ENOENT')return json(res,404,{error:'PDF ni najden.'});throw e;}return;}
    if(kind==='search'){
-    const projectId=url.searchParams.get('project'),query=(url.searchParams.get('q')||'').trim();if(!valid(projectId)||query.length<2||query.length>80)return json(res,400,{error:'Izberi projekt in vpiši oznako (2–80 znakov), npr. H22 ali V23.'});
+    const projectId=url.searchParams.get('project'),documentId=url.searchParams.get('document'),query=(url.searchParams.get('q')||'').trim();if(!valid(projectId)||(documentId!==null&&!valid(documentId))||query.length<2||query.length>80)return json(res,400,{error:'Izberi projekt in vpiši oznako (2–80 znakov), npr. H22 ali V23.'});
     const project=await get('p-'+projectId);if(!project)return json(res,404,{error:'Projekt ni najden.'});
     const names=(await readdir(path.join(root,'meta'))).filter(n=>n.startsWith('d-')&&n.endsWith('.json'));let documents=(await Promise.all(names.map(n=>get(n.slice(0,-5))))).filter(d=>d&&d.project===projectId);
     if(session.role==='viewer'&&!project.viewerIds?.includes(session.personId))return json(res,403,{error:'Projekt ni dodeljen za pregled.'});
     if(session.role==='staff'){documents=documents.filter(d=>d.assigneeId===session.personId);if(!documents.length)return json(res,403,{error:'V tem projektu nimaš dodeljenih PDF-jev.'});}
+    if(documentId!==null){documents=documents.filter(d=>d.id===documentId);if(!documents.length)return json(res,403,{error:'PDF ni dostopen v izbranem projektu.'});}
     return json(res,200,await pdfSearch.search(documents,query));
    }
    const names=(await readdir(path.join(root,'meta'))).filter(n=>n.endsWith('.json'));
