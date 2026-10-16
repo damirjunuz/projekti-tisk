@@ -35,3 +35,5 @@
 @media(prefers-reduced-motion:reduce){.spin{animation:none}*{scroll-behavior:auto!important}}
 
 .single-page-note{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 12px;margin:8px 0;background:#eef6f1;border-radius:8px;font-size:12px;color:#496f59}.single-page-note a{display:inline-flex;align-items:center;min-height:40px;color:#227768;text-decoration:underline;font-weight:600}.viewer>.single-page-note{margin:0 12px 10px}
+
+.page-image{position:relative;min-height:320px;background:white;scroll-margin-top:148px;border:1px solid #dce6df;border-radius:8px;overflow:hidden}.page-image img{display:block;width:100%;height:auto;visibility:hidden}.page-image.is-loaded img{visibility:visible}.page-image.is-loaded{min-height:0}.page-image-status{min-height:320px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;color:#517460;font-size:13px}.page-image-status a{color:#227768;text-decoration:underline;padding:12px}.pdf-preview.image-preview{height:auto;max-height:none}.readonly-preview>.page-image{margin-top:12px}

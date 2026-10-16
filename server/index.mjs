@@ -6,9 +6,10 @@ import {randomUUID} from 'node:crypto';
 import {PDFDocument} from 'pdf-lib';
 import {createAuth} from './auth.mjs';
 import {createPdfSearch} from './pdf-search.mjs';
+import {createPageImages} from './page-images.mjs';
 const root=path.resolve(process.env.DATA_DIR||'data'),dist=path.resolve(process.env.STATIC_DIR||fileURLToPath(new URL('../dist/',import.meta.url)));
 const origin=process.env.APP_ORIGIN;
-const pdfSearch=createPdfSearch(root);
+const pdfSearch=createPdfSearch(root),pageImages=createPageImages(root);
 await mkdir(path.join(root,'meta'),{recursive:true});await mkdir(path.join(root,'files'),{recursive:true});
 let queue=Promise.resolve();
 function locked(action){const result=queue.then(action);queue=result.catch(()=>{});return result;}
@@ -39,8 +40,8 @@ async function handle(req,res){
  if(url.pathname==='/api/data'){
   const session=auth.session(req);if(!session)return json(res,401,{error:'Potrebna je prijava s PIN-om.'});
   const id=url.searchParams.get('id'),kind=url.searchParams.get('kind');
-  if(req.method==='GET'||(req.method==='HEAD'&&kind==='file')){
-   if(kind==='file'){if(!valid(id))return json(res,400,{error:'Napačen dokument.'});const document=await get('d-'+id);if(!document)return json(res,404,{error:'PDF ni najden.'});if(!await canReadDocument(session,document))return json(res,403,{error:'Ta PDF ni v tvoji mapi.'});const pageValue=url.searchParams.get('page'),page=pageValue===null?null:Number(pageValue);if(page!==null&&(!/^\d+$/.test(pageValue)||!Number.isInteger(page)||page<1||page>document.pages))return json(res,400,{error:'Napačna številka strani.'});try{let bytes=await readFile(path.join(root,'files',id+'.pdf'));if(page!==null){const source=await PDFDocument.load(bytes),preview=await PDFDocument.create();const [selected]=await preview.copyPages(source,[page-1]);preview.addPage(selected);bytes=Buffer.from(await preview.save());}res.writeHead(200,{'Content-Type':'application/pdf','Content-Disposition':page===null?'inline':'inline; filename="stran-'+page+'.pdf"','Cache-Control':'no-store'});res.end(req.method==='HEAD'?undefined:bytes);}catch(e){if(e.code==='ENOENT')return json(res,404,{error:'PDF ni najden.'});throw e;}return;}
+  if(req.method==='GET'||(req.method==='HEAD'&&(kind==='file'||kind==='page-image'))){
+   if(kind==='file'||kind==='page-image'){if(!valid(id))return json(res,400,{error:'Napačen dokument.'});const document=await get('d-'+id);if(!document)return json(res,404,{error:'PDF ni najden.'});if(!await canReadDocument(session,document))return json(res,403,{error:'Ta PDF ni v tvoji mapi.'});const pageValue=url.searchParams.get('page'),page=pageValue===null?null:Number(pageValue);if(page!==null&&(!/^\d+$/.test(pageValue)||!Number.isInteger(page)||page<1||page>document.pages))return json(res,400,{error:'Napačna številka strani.'});if(kind==='page-image'){if(page===null)return json(res,400,{error:'Izberi stran za prikaz.'});try{const bytes=await pageImages.get(id,page);res.writeHead(200,{'Content-Type':'image/png','Cache-Control':'no-store'});res.end(req.method==='HEAD'?undefined:bytes);}catch{return json(res,503,{error:'Strani ni bilo mogoče izrisati. Poskusi znova.'});}return;}try{let bytes=await readFile(path.join(root,'files',id+'.pdf'));if(page!==null){const source=await PDFDocument.load(bytes),preview=await PDFDocument.create();const [selected]=await preview.copyPages(source,[page-1]);preview.addPage(selected);bytes=Buffer.from(await preview.save());}res.writeHead(200,{'Content-Type':'application/pdf','Content-Disposition':page===null?'inline':'inline; filename="stran-'+page+'.pdf"','Cache-Control':'no-store'});res.end(req.method==='HEAD'?undefined:bytes);}catch(e){if(e.code==='ENOENT')return json(res,404,{error:'PDF ni najden.'});throw e;}return;}
    if(kind==='search'){
     const projectId=url.searchParams.get('project'),documentId=url.searchParams.get('document'),query=(url.searchParams.get('q')||'').trim();if(!valid(projectId)||(documentId!==null&&!valid(documentId))||query.length<2||query.length>80)return json(res,400,{error:'Izberi projekt in vpiši oznako (2–80 znakov), npr. H22 ali V23.'});
     const project=await get('p-'+projectId);if(!project)return json(res,404,{error:'Projekt ni najden.'});
@@ -119,7 +120,7 @@ async function handle(req,res){
      const body=JSON.parse((await readBody(req,16384)).toString());if(!Array.isArray(body.ids)||!body.ids.length||body.ids.length>500||body.ids.some(x=>!valid(x)))return json(res,400,{error:'Izberi dokumente za brisanje.'});
      documents=await Promise.all([...new Set(body.ids)].map(id=>get('d-'+id)));if(documents.some(d=>!d))return json(res,404,{error:'Dokument ni najden.'});
     }
-    for(const d of documents){try{await unlink(path.join(root,'files',d.id+'.pdf'));}catch(e){if(e.code!=='ENOENT')throw e;}await unlink(meta('d-'+d.id));await pdfSearch.remove(d.id);}
+    for(const d of documents){try{await unlink(path.join(root,'files',d.id+'.pdf'));}catch(e){if(e.code!=='ENOENT')throw e;}await unlink(meta('d-'+d.id));await pdfSearch.remove(d.id);await pageImages.remove(d.id);}
     let tasks=[];if(kind==='project'){const names=(await readdir(path.join(root,'meta'))).filter(n=>n.startsWith('t-')&&n.endsWith('.json'));tasks=(await Promise.all(names.map(n=>get(n.slice(0,-5))))).filter(t=>t&&t.project===id);for(const t of tasks)await unlink(meta('t-'+t.id));await unlink(meta('p-'+id));}
     json(res,200,{deleted:[...documents.map(d=>d.id),...tasks.map(t=>t.id)],project:kind==='project'?id:null});
    });
